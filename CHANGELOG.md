@@ -30,6 +30,8 @@ All notable changes to Helix Trading App are documented here.
 - Visible Change of Character, Order Block, and Steroid Order Block layers now follow the same global and eye-based notification policy.
 - Indicator activation, visibility changes, symbol/timeframe changes, and parameter edits seed a fresh baseline so historical setups do not generate alerts.
 - Added stable event deduplication, persisted Inbox records, foreground macOS banners, notification-permission diagnostics, and a permission status row in Settings.
+- Clicking a strategy or Change of Character notification now opens its symbol and timeframe, centers the triggering candle, and highlights the notified entry or structure-break price on the chart. The same deep link works from macOS banners and Inbox rows.
+- Order Block and Steroid Order Block overlays are now chart-only and no longer generate lifecycle notifications.
 
 ### Tests and Reliability
 

@@ -1,6 +1,23 @@
 import Foundation
 import UserNotifications
 
+struct NotificationChartTarget: Codable, Hashable, Identifiable {
+    let pairID: String
+    let timeframeRawValue: String
+    let indicatorRawValue: String
+    let candleDate: Date
+    let price: Double
+    let label: String
+
+    var id: String {
+        "\(pairID)|\(timeframeRawValue)|\(indicatorRawValue)|\(candleDate.timeIntervalSince1970)|\(price)"
+    }
+}
+
+extension Notification.Name {
+    static let helixNotificationOpened = Notification.Name("helix.notification.opened")
+}
+
 /// Presents local notifications even while Helix is the foreground app.
 /// macOS otherwise accepts the request but suppresses the visible banner.
 private final class ForegroundNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
@@ -12,6 +29,25 @@ private final class ForegroundNotificationDelegate: NSObject, UNUserNotification
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        defer { completionHandler() }
+        guard let encoded = response.notification.request.content.userInfo["chartTarget"] as? String,
+              let data = Data(base64Encoded: encoded),
+              let target = try? JSONDecoder().decode(NotificationChartTarget.self, from: data)
+        else { return }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .helixNotificationOpened,
+                object: nil,
+                userInfo: ["target": target]
+            )
+        }
     }
 }
 
@@ -37,6 +73,7 @@ struct NotificationRecord: Identifiable, Codable, Equatable {
     /// whichever timeframe the chart happened to be on) may not
     /// always have a crisp single timeframe.
     let timeframeLabel: String?
+    let chartTarget: NotificationChartTarget?
     let createdAt: Date
     var isRead: Bool
 
@@ -79,6 +116,7 @@ struct NotificationRecord: Identifiable, Codable, Equatable {
         title: String,
         body: String,
         timeframeLabel: String?,
+        chartTarget: NotificationChartTarget? = nil,
         createdAt: Date = Date(),
         isRead: Bool = false
     ) {
@@ -89,6 +127,7 @@ struct NotificationRecord: Identifiable, Codable, Equatable {
         self.title = title
         self.body = body
         self.timeframeLabel = timeframeLabel
+        self.chartTarget = chartTarget
         self.createdAt = createdAt
         self.isRead = isRead
     }
@@ -105,6 +144,7 @@ struct NotificationRecord: Identifiable, Codable, Equatable {
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
         timeframeLabel = try c.decodeIfPresent(String.self, forKey: .timeframeLabel)
+        chartTarget = try c.decodeIfPresent(NotificationChartTarget.self, forKey: .chartTarget)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         isRead = try c.decodeIfPresent(Bool.self, forKey: .isRead) ?? false
     }
@@ -176,7 +216,8 @@ final class NotificationInbox: ObservableObject {
         category: NotificationRecord.Category,
         title: String,
         body: String,
-        timeframeLabel: String? = nil
+        timeframeLabel: String? = nil,
+        chartTarget: NotificationChartTarget? = nil
     ) -> Bool {
         let now = Date()
         if let key = dedupKey, let last = lastFiredAt[key], now.timeIntervalSince(last) < cooldown {
@@ -191,6 +232,7 @@ final class NotificationInbox: ObservableObject {
             title: title,
             body: body,
             timeframeLabel: timeframeLabel,
+            chartTarget: chartTarget,
             createdAt: now
         )
         records.append(record)
@@ -259,6 +301,10 @@ final class NotificationInbox: ObservableObject {
         content.title = record.title
         content.body = record.body
         content.sound = .default
+        if let target = record.chartTarget,
+           let data = try? JSONEncoder().encode(target) {
+            content.userInfo["chartTarget"] = data.base64EncodedString()
+        }
         let request = UNNotificationRequest(identifier: record.id.uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error {

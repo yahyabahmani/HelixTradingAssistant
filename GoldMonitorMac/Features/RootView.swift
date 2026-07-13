@@ -85,6 +85,10 @@ struct RootView: View {
                 showWhatsNew = true
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .helixNotificationOpened)) { note in
+            guard let target = note.userInfo?["target"] as? NotificationChartTarget else { return }
+            app.openNotificationChart(target)
+        }
     }
 
     // The hidden title bar option in WindowGroup leaves room for the

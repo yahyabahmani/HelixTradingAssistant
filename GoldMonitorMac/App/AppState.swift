@@ -60,6 +60,16 @@ final class AppState: ObservableObject {
     /// when the user dismisses the overlay or switches pair/timeframe.
     @Published var journalChartEntry: JournalEntry? = nil
 
+    /// One-shot chart deep link created by clicking an Inbox row or a
+    /// macOS notification banner.
+    @Published var notificationChartTarget: NotificationChartTarget? = nil
+
+    func openNotificationChart(_ target: NotificationChartTarget) {
+        selectedPairID = target.pairID
+        notificationChartTarget = target
+        selectedSidebarItem = .dashboard
+    }
+
     // ── AI analysis tabs (per pair) ────────────────────────────────
     /// Open analysis tabs per symbol — browser-style. Lazily seeded
     /// with one tab the first time a pair's page is shown. In-memory

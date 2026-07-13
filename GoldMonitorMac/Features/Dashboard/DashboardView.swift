@@ -341,7 +341,14 @@ struct DashboardView: View {
                     category: .strategy,
                     title: "\(pair.name) - MicroMap is forming",
                     body: "A \(side) micro-channel setup has formed and is waiting for entry confirmation.",
-                    timeframeLabel: timeframe.rawValue
+                    timeframeLabel: timeframe.rawValue,
+                    chartTarget: notificationTarget(
+                        pairID: pairID,
+                        indicator: .microMapStrategy,
+                        candle: closedCandles[result.microEndIndex],
+                        price: result.direction == .long ? result.spikeHigh : result.spikeLow,
+                        label: "MicroMap \(side)"
+                    )
                 )
             }
 
@@ -367,7 +374,14 @@ struct DashboardView: View {
                     category: .strategy,
                     title: "\(pair.name) - MicroMap entry \(attempt.number)",
                     body: "\(side) entry confirmed at \(PriceFormat.exact(attempt.entry ?? closedCandles[trigger].close)). \(quality.capitalized) confluence \(result.confluence.score)/6.",
-                    timeframeLabel: timeframe.rawValue
+                    timeframeLabel: timeframe.rawValue,
+                    chartTarget: notificationTarget(
+                        pairID: pairID,
+                        indicator: .microMapStrategy,
+                        candle: closedCandles[trigger],
+                        price: attempt.entry ?? closedCandles[trigger].close,
+                        label: "MicroMap entry \(attempt.number)"
+                    )
                 )
             }
 
@@ -385,7 +399,14 @@ struct DashboardView: View {
                         category: .strategy,
                         title: "\(pair.name) - MicroMap invalidated",
                         body: "The third close-confirmed stop invalidated the \(result.direction.rawValue.uppercased()) setup.",
-                        timeframeLabel: timeframe.rawValue
+                        timeframeLabel: timeframe.rawValue,
+                        chartTarget: notificationTarget(
+                            pairID: pairID,
+                            indicator: .microMapStrategy,
+                            candle: closedCandles[end],
+                            price: closedCandles[end].close,
+                            label: "MicroMap invalidated"
+                        )
                     )
                 }
             }
@@ -485,7 +506,14 @@ struct DashboardView: View {
                 category: .strategy,
                 title: "\(pair.name) - SP2L is forming",
                 body: "A \(side) SP2L setup has formed. Limit entry: \(PriceFormat.exact(result.entry)), stop: \(PriceFormat.exact(result.stopLoss)).",
-                timeframeLabel: timeframe.rawValue
+                timeframeLabel: timeframe.rawValue,
+                chartTarget: notificationTarget(
+                    pairID: pairID,
+                    indicator: .sp2lStrategy,
+                    candle: closedCandles[result.followThroughIndex],
+                    price: result.entry,
+                    label: "SP2L entry"
+                )
             )
         }
 
@@ -564,7 +592,14 @@ struct DashboardView: View {
                 category: .strategy,
                 title: "\(pair.name) - \(setup) \(side) confirmed",
                 body: "Entry \(PriceFormat.exact(result.entry)), stop \(PriceFormat.exact(result.stopLoss)), target \(PriceFormat.exact(result.takeProfit)).",
-                timeframeLabel: timeframe.rawValue
+                timeframeLabel: timeframe.rawValue,
+                chartTarget: notificationTarget(
+                    pairID: pairID,
+                    indicator: .pinBarCombo,
+                    candle: closedCandles[result.confirmationIndex],
+                    price: result.entry,
+                    label: "\(setup) entry"
+                )
             )
         }
 
@@ -629,7 +664,14 @@ struct DashboardView: View {
                 category: .strategy,
                 title: "\(pair.name) - MTR \(side) confirmed",
                 body: "\(result.variant.label). Entry \(PriceFormat.exact(entry)), stop \(PriceFormat.exact(stop)), target \(PriceFormat.exact(target)).",
-                timeframeLabel: timeframe.rawValue
+                timeframeLabel: timeframe.rawValue,
+                chartTarget: notificationTarget(
+                    pairID: pairID,
+                    indicator: .mtrStrategy,
+                    candle: closedCandles[confirmation],
+                    price: entry,
+                    label: "MTR \(side) entry"
+                )
             )
         }
 
@@ -639,6 +681,23 @@ struct DashboardView: View {
 
     private func mtrConfirmedEventKey(_ result: MTRSetup.Result) -> String {
         "mtr|\(app.selectedPairID ?? "")|\(timeframe.rawValue)|\(result.direction.rawValue)|\(result.channelStartIndex)|\(result.channelEndIndex)|\(result.breakoutIndex)|\(result.retestIndex)|\(result.confirmationIndex ?? -1)"
+    }
+
+    private func notificationTarget(
+        pairID: String,
+        indicator: IndicatorKind,
+        candle: Candle,
+        price: Double,
+        label: String
+    ) -> NotificationChartTarget {
+        NotificationChartTarget(
+            pairID: pairID,
+            timeframeRawValue: timeframe.rawValue,
+            indicatorRawValue: indicator.rawValue,
+            candleDate: candle.id,
+            price: price,
+            label: label
+        )
     }
     /// Tool currently armed in the chart toolbar. `.none` ⇒ pointer
     /// (drag pans). Set via the drawing toolbar buttons; deliberately
@@ -1195,6 +1254,17 @@ struct DashboardView: View {
             await reloadCandles()
             warmHistory()   // backfill deep history for this pair (skeleton while it loads)
         }
+        .task(id: app.notificationChartTarget?.id) {
+            guard let target = app.notificationChartTarget,
+                  target.pairID == app.selectedPairID,
+                  let targetTimeframe = Timeframe(rawValue: target.timeframeRawValue)
+            else { return }
+            if timeframe != targetTimeframe {
+                timeframe = targetTimeframe
+            }
+            await reloadCandles()
+            focusChart(on: target)
+        }
         // Wire the AutoTraderEngine's headless candle loader once
         // the dashboard mounts. The engine needs this to fire
         // Confluence Trade Scanner after a trade closes without the user opening
@@ -1682,6 +1752,13 @@ struct DashboardView: View {
                         guard let je = app.journalChartEntry,
                               je.pairID == pair.id else { return [] }
                         return [je]
+                    }(),
+                    notificationFocus: {
+                        guard let target = app.notificationChartTarget,
+                              target.pairID == pair.id,
+                              target.timeframeRawValue == timeframe.rawValue
+                        else { return nil }
+                        return target
                     }(),
                     // Suppress the live-price patch during replay — the
                     // last revealed bar is historical, not "now".
@@ -3372,6 +3449,19 @@ struct DashboardView: View {
         notifyOrderBlockEvents(result, pairID: pairID)
     }
 
+    private func focusChart(on target: NotificationChartTarget) {
+        guard !candles.isEmpty else { return }
+        let index = candles.indices.min {
+            abs(candles[$0].id.timeIntervalSince(target.candleDate))
+                < abs(candles[$1].id.timeIntervalSince(target.candleDate))
+        } ?? candles.count - 1
+        let radius = 30
+        let lower = max(0, index - radius)
+        let upper = min(candles.count - 1, index + radius)
+        xDomain = Double(lower)...Double(max(lower + 1, upper))
+        yDomain = nil
+    }
+
     /// Cheap live-tick path. The full `reloadCandles()` now re-reads the
     /// *entire* stored series (years of bars) and re-folds it — far too
     /// heavy to run on the main thread at the 1 Hz live cadence. Instead
@@ -3410,65 +3500,29 @@ struct DashboardView: View {
         notifyOrderBlockEvents(merged, pairID: pairID)
     }
 
-    /// Feeds the freshest Order Block / Steroid Order Block zones to
-    /// the alert evaluator so it can fire a notification on
-    /// appear/retest/exhaust transitions. The chart eye controls whether
-    /// each detector runs; the Settings switch is the global kill switch.
-    /// Mirrors the RSI-alert feed just above.
+    /// Feeds Change of Character zones to the lifecycle alert evaluator.
+    /// Order Block and Steroid Order Block notifications are intentionally
+    /// disabled; those indicators remain chart-only.
     private func notifyOrderBlockEvents(_ candles: [Candle], pairID: String) {
-        let orderBlockActive = isStrategyNotificationActive(.orderBlock)
-        let steroidOrderBlockActive = isStrategyNotificationActive(.steroidOrderBlock)
         let chochActive = isStrategyNotificationActive(.changeOfCharacter)
-        guard orderBlockActive || steroidOrderBlockActive || chochActive else { return }
+        guard chochActive else { return }
         let pairLabel = app.pairs.first(where: { $0.id == pairID })?.name ?? pairID
 
-        // Each indicator's full-history `compute` runs on its own
-        // background task — same reasoning as `ChartDerivedCache`: this
-        // is real work (order-block run-length scans, volume-profile
-        // bucketing) and must never block the main thread just because
-        // the notify toggle happens to be on.
-        if orderBlockActive {
-            let config = oscillatorConfig
-            Task.detached(priority: .utility) {
-                let zones = OrderBlocks.compute(
-                    candles,
-                    periods: config.obPeriods,
-                    threshold: config.obThreshold,
-                    useWicks: config.obUseWicks,
-                    detectSteroids: config.obDetectSteroids
-                )
-                await self.alertStore.evaluateOrderBlocks(zones, pairID: pairID, pairLabel: pairLabel)
-            }
-        }
-        if steroidOrderBlockActive {
-            let config = oscillatorConfig
-            Task.detached(priority: .utility) {
-                let zones = SteroidOrderBlocks.compute(
-                    candles,
-                    periods: config.sobPeriods,
-                    threshold: config.sobThreshold,
-                    useWicks: config.sobUseWicks,
-                    detectSteroids: config.sobDetectSteroids,
-                    volumeMultiplier: config.sobVolumeMultiplier
-                )
-                await self.alertStore.evaluateSteroidOrderBlocks(zones, pairID: pairID, pairLabel: pairLabel)
-            }
-        }
-        if chochActive {
-            let config = oscillatorConfig
-            Task.detached(priority: .utility) {
-                // Compute with showMitigated:true so the invalidation
-                // (mitigated) transition can fire even when the chart hides
-                // mitigated zones.
-                let zones = ChangeOfCharacter.compute(
-                    candles,
-                    swingLength: config.chochSwingLength,
-                    minSwingPct: config.chochMinSwingPct,
-                    requireFVG: config.chochRequireFVG,
-                    showMitigated: true
-                )
-                await self.alertStore.evaluateCHoCH(zones, pairID: pairID, pairLabel: pairLabel)
-            }
+        let config = oscillatorConfig
+        Task.detached(priority: .utility) {
+            let zones = ChangeOfCharacter.compute(
+                candles,
+                swingLength: config.chochSwingLength,
+                minSwingPct: config.chochMinSwingPct,
+                requireFVG: config.chochRequireFVG,
+                showMitigated: true
+            )
+            await self.alertStore.evaluateCHoCH(
+                zones,
+                candles: candles,
+                pairID: pairID,
+                pairLabel: pairLabel
+            )
         }
     }
 

@@ -123,6 +123,7 @@ private struct BlockZoneSnapshot {
     let high: Double
     let low: Double
     let stage: BlockStage
+    var chartTarget: NotificationChartTarget? = nil
 
     /// Stable identity for a zone, deliberately NOT `Zone.id` (which is
     /// `"<arrayIndex>-bull/bear"`). The array index is only the zone's
@@ -393,7 +394,12 @@ final class AlertStore: ObservableObject {
     /// diff as order blocks, but under its own namespace + category so the
     /// wording reads as a trend-change signal. `.mitigated` maps to the
     /// shared `.exhausted` stage. Gated by `OscillatorConfig.chochNotifyEvents`.
-    func evaluateCHoCH(_ zones: [ChangeOfCharacter.Zone], pairID: String, pairLabel: String) {
+    func evaluateCHoCH(
+        _ zones: [ChangeOfCharacter.Zone],
+        candles: [Candle],
+        pairID: String,
+        pairLabel: String
+    ) {
         evaluateBlockZones(
             zones.map { z -> BlockZoneSnapshot in
                 let stage: BlockStage
@@ -404,7 +410,18 @@ final class AlertStore: ObservableObject {
                 }
                 return BlockZoneSnapshot(
                     key: BlockZoneSnapshot.stableKey(isBullish: z.isBullish, high: z.high, low: z.low),
-                    isBullish: z.isBullish, high: z.high, low: z.low, stage: stage
+                    isBullish: z.isBullish,
+                    high: z.high,
+                    low: z.low,
+                    stage: stage,
+                    chartTarget: z.chochIndex < candles.count ? NotificationChartTarget(
+                        pairID: pairID,
+                        timeframeRawValue: timeframeLabel,
+                        indicatorRawValue: IndicatorKind.changeOfCharacter.rawValue,
+                        candleDate: candles[z.chochIndex].id,
+                        price: z.brokenLevel,
+                        label: z.isBullish ? "Bullish CHoCH" : "Bearish CHoCH"
+                    ) : nil
                 )
             },
             namespace: "choch", label: "CHoCH", category: .changeOfCharacter,
@@ -517,7 +534,8 @@ final class AlertStore: ObservableObject {
             category: category,
             title: title,
             body: body,
-            timeframeLabel: timeframeLabel.isEmpty ? nil : timeframeLabel
+            timeframeLabel: timeframeLabel.isEmpty ? nil : timeframeLabel,
+            chartTarget: zone.chartTarget
         )
     }
 

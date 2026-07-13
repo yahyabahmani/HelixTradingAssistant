@@ -8,6 +8,7 @@ import SwiftUI
 /// Center.
 struct NotificationInboxView: View {
     @EnvironmentObject private var inbox: NotificationInbox
+    @EnvironmentObject private var app: AppState
 
     @State private var categoryFilter: NotificationRecord.Category? = nil
 
@@ -149,6 +150,12 @@ struct NotificationInboxView: View {
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Theme.Color.textMuted)
                     }
+                    if record.chartTarget != nil {
+                        Spacer()
+                        Label("Show on chart", systemImage: "arrow.up.right.square")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Theme.Color.accentStart)
+                    }
                 }
             }
 
@@ -163,7 +170,12 @@ struct NotificationInboxView: View {
         .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.Color.surface))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).strokeBorder(Theme.Color.border, lineWidth: 1))
         .contentShape(Rectangle())
-        .onTapGesture { inbox.markRead(id: record.id) }
+        .onTapGesture {
+            inbox.markRead(id: record.id)
+            if let target = record.chartTarget {
+                app.openNotificationChart(target)
+            }
+        }
     }
 
     private func categoryColor(_ category: NotificationRecord.Category) -> Color {
@@ -186,7 +198,7 @@ struct NotificationInboxView: View {
             Text("No notifications yet")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.Color.textSecondary)
-            Text("Price alerts, order block events, and scanner opportunities will show up here.")
+            Text("Price alerts, strategy signals, and scanner opportunities will show up here.")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.Color.textMuted)
                 .multilineTextAlignment(.center)

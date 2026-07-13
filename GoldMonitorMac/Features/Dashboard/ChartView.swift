@@ -130,6 +130,10 @@ struct ChartView: View {
     /// see the actual trade plan against historical price action.
     var journalEntries: [JournalEntry] = []
 
+    /// Signal selected from the Inbox or a macOS notification banner.
+    /// Rendered as a prominent entry marker after navigation.
+    var notificationFocus: NotificationChartTarget? = nil
+
     /// Most recent live price for the pair this chart represents.
     /// Drives the live P/L capsule on active trades AND the VALID /
     /// INVALID badge on TA scenario entry tags (a scenario flips to
@@ -669,6 +673,7 @@ struct ChartView: View {
             pinBarComboMarks
             microMapMarks
             mtrMarks
+            notificationFocusMarks
 
             // S/R levels — horizontal rules at the prices the AI
             // analysis identified. Drawn behind the candles (before the
@@ -2285,6 +2290,26 @@ struct ChartView: View {
 
     private func mtrDirectionColor(_ direction: MTRSetup.Direction) -> Color {
         direction == .long ? Theme.Color.success : Theme.Color.danger
+    }
+
+    @ChartContentBuilder
+    private var notificationFocusMarks: some ChartContent {
+        if let focus = notificationFocus,
+           let index = barIndex(closestTo: focus.candleDate) {
+            RuleMark(x: .value("Notification candle", Double(index)))
+                .foregroundStyle(Theme.Color.accentStart.opacity(0.65))
+                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+
+            PointMark(
+                x: .value("Notification x", Double(index)),
+                y: .value("Notification price", focus.price)
+            )
+            .symbolSize(150)
+            .foregroundStyle(Theme.Color.accentStart)
+            .annotation(position: .top, alignment: .center, spacing: 5) {
+                setupTag(focus.label, color: Theme.Color.accentStart)
+            }
+        }
     }
 
     private func mtrStatusLabel(_ result: MTRSetup.Result) -> String {
@@ -4428,6 +4453,10 @@ struct ChartView: View {
                 if value < lo { lo = value }
                 if value > hi { hi = value }
             }
+        }
+        if let focus = notificationFocus {
+            if focus.price < lo { lo = focus.price }
+            if focus.price > hi { hi = focus.price }
         }
         for session in volumeProfileSessions {
             for bucket in session.buckets {

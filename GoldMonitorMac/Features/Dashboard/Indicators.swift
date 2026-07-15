@@ -243,15 +243,15 @@ enum IndicatorKind: String, CaseIterable, Identifiable, Hashable, Codable {
         case .sp2lStrategy:
             return [
                 .double(key: "minSpikeBars", label: "Min spike candles", default: 2, step: 1, range: 2...8),
-                .double(key: "maxSpikeBars", label: "Max spike candles", default: 4, step: 1, range: 2...10),
+                .double(key: "maxSpikeBars", label: "Max spike candles", default: 6, step: 1, range: 2...10),
                 .double(key: "rangeBars", label: "Balance candles", default: 4, step: 1, range: 2...12),
                 .double(key: "targetCount", label: "Take-profit targets", default: 1, step: 1, range: 1...3),
                 .double(key: "atrPeriod", label: "ATR period", default: 14, step: 1, range: 2...100),
                 .double(key: "minSpikeATR", label: "Min spike width (× ATR)", default: 1.0, step: 0.1, range: 0.1...5),
-                .double(key: "maxSpikeATR", label: "Max spike width (× ATR)", default: 3.0, step: 0.25, range: 0.5...10),
+                .double(key: "maxSpikeATR", label: "Max spike width (× ATR)", default: 10.0, step: 0.25, range: 0.5...10),
                 .double(key: "maxRangeATR", label: "Max balance width (× ATR)", default: 1.5, step: 0.1, range: 0.25...5),
                 .double(key: "minGapPct", label: "Min gap %", default: 0.0, step: 0.1, range: 0...5),
-                .double(key: "maxPressureGapBar", label: "Latest P-Gap candle", default: 3, step: 1, range: 3...6),
+                .double(key: "maxPressureGapBar", label: "Latest P-Gap candle", default: 6, step: 1, range: 3...6),
                 .double(key: "emaPeriod", label: "Equilibrium EMA", default: 60, step: 1, range: 10...200),
                 .bool(key: "useEMAContext", label: "Require EMA equilibrium context", default: true),
                 .double(key: "maxEMADistanceATR", label: "Max start distance from EMA (× ATR)", default: 1.0, step: 0.1, range: 0...5),
@@ -377,6 +377,28 @@ struct IndicatorInstance: Identifiable, Hashable, Codable {
             if self.params[spec.key] == nil { self.params[spec.key] = spec.defaultValue }
         }
         self.hidden = hidden
+    }
+
+    /// Upgrades only the restrictive defaults shipped by the first SP2L
+    /// release. Returns true when the instance changed so its owner can
+    /// persist the migrated payload. Explicit non-default tuning survives.
+    @discardableResult
+    mutating func migrateLegacySP2LDefaults() -> Bool {
+        guard kind == .sp2lStrategy else { return false }
+        var changed = false
+        if params["maxSpikeBars"]?.doubleValue == 4 {
+            params["maxSpikeBars"] = .double(6)
+            changed = true
+        }
+        if params["maxSpikeATR"]?.doubleValue == 3 {
+            params["maxSpikeATR"] = .double(10)
+            changed = true
+        }
+        if params["maxPressureGapBar"]?.doubleValue == 3 {
+            params["maxPressureGapBar"] = .double(6)
+            changed = true
+        }
+        return changed
     }
 
     var label: String {

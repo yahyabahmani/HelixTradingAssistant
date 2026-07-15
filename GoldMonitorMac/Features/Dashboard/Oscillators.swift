@@ -146,19 +146,19 @@ struct OscillatorConfig: Codable, Equatable {
     var nyAtrMult: Double = 1.0
     var nyAMOnly: Bool = true
 
-    // SP2L defaults follow the source video: a short 2-4 bar pressure
+    // SP2L defaults follow the source examples: a 2-6 bar pressure
     // move out of balance, first-pullback limit entry, EMA(60) context,
     // and a 1R target. Detection runs on every chart timeframe; numeric
     // thresholds not specified by the teacher remain tunable.
     var sp2lMinSpikeBars: Int = 2
-    var sp2lMaxSpikeBars: Int = 4
+    var sp2lMaxSpikeBars: Int = 6
     var sp2lRangeBars: Int = 4
     var sp2lATRPeriod: Int = 14
     var sp2lMinSpikeATR: Double = 1.0
-    var sp2lMaxSpikeATR: Double = 3.0
+    var sp2lMaxSpikeATR: Double = 10.0
     var sp2lMaxRangeATR: Double = 1.5
     var sp2lMinGapPct: Double = 0.0
-    var sp2lMaxPressureGapBar: Int = 3
+    var sp2lMaxPressureGapBar: Int = 6
     var sp2lEMAPeriod: Int = 60
     var sp2lUseEMAContext: Bool = true
     var sp2lMaxEMADistanceATR: Double = 1.0
@@ -277,6 +277,7 @@ struct OscillatorConfig: Codable, Equatable {
     // payload that predates the field just falls back to its default
     // instead of failing to decode and wiping the user's whole config.
     private static let storageKey = "dashboard.indicator.config.v2"
+    private static let sp2lDefaultsVersionKey = "dashboard.sp2l.defaults.version"
 
     init() {}
 
@@ -320,14 +321,14 @@ struct OscillatorConfig: Codable, Equatable {
         nyAtrMult          = try c.decodeIfPresent(Double.self, forKey: .nyAtrMult)          ?? 1.0
         nyAMOnly           = try c.decodeIfPresent(Bool.self,   forKey: .nyAMOnly)           ?? true
         sp2lMinSpikeBars   = try c.decodeIfPresent(Int.self,    forKey: .sp2lMinSpikeBars)   ?? 2
-        sp2lMaxSpikeBars   = try c.decodeIfPresent(Int.self,    forKey: .sp2lMaxSpikeBars)   ?? 4
+        sp2lMaxSpikeBars   = try c.decodeIfPresent(Int.self,    forKey: .sp2lMaxSpikeBars)   ?? 6
         sp2lRangeBars      = try c.decodeIfPresent(Int.self,    forKey: .sp2lRangeBars)      ?? 4
         sp2lATRPeriod      = try c.decodeIfPresent(Int.self,    forKey: .sp2lATRPeriod)      ?? 14
         sp2lMinSpikeATR    = try c.decodeIfPresent(Double.self, forKey: .sp2lMinSpikeATR)    ?? 1.0
-        sp2lMaxSpikeATR    = try c.decodeIfPresent(Double.self, forKey: .sp2lMaxSpikeATR)    ?? 3.0
+        sp2lMaxSpikeATR    = try c.decodeIfPresent(Double.self, forKey: .sp2lMaxSpikeATR)    ?? 10.0
         sp2lMaxRangeATR    = try c.decodeIfPresent(Double.self, forKey: .sp2lMaxRangeATR)    ?? 1.5
         sp2lMinGapPct      = try c.decodeIfPresent(Double.self, forKey: .sp2lMinGapPct)      ?? 0.0
-        sp2lMaxPressureGapBar = try c.decodeIfPresent(Int.self, forKey: .sp2lMaxPressureGapBar) ?? 3
+        sp2lMaxPressureGapBar = try c.decodeIfPresent(Int.self, forKey: .sp2lMaxPressureGapBar) ?? 6
         sp2lEMAPeriod      = try c.decodeIfPresent(Int.self,    forKey: .sp2lEMAPeriod)      ?? 60
         sp2lUseEMAContext  = try c.decodeIfPresent(Bool.self,   forKey: .sp2lUseEMAContext)  ?? true
         sp2lMaxEMADistanceATR = try c.decodeIfPresent(Double.self, forKey: .sp2lMaxEMADistanceATR) ?? 1.0
@@ -421,8 +422,20 @@ struct OscillatorConfig: Codable, Equatable {
 
     static func load() -> OscillatorConfig {
         guard let data = UserDefaults.standard.data(forKey: storageKey),
-              let cfg = try? JSONDecoder().decode(OscillatorConfig.self, from: data)
+              var cfg = try? JSONDecoder().decode(OscillatorConfig.self, from: data)
         else { return OscillatorConfig() }
+
+        // The first SP2L release used restrictive implementation defaults
+        // (4 bars, 3 ATR and a P-Gap limited to candle 3). Upgrade only values
+        // that still equal those old defaults, preserving explicit tuning.
+        let defaults = UserDefaults.standard
+        if defaults.integer(forKey: sp2lDefaultsVersionKey) < 2 {
+            if cfg.sp2lMaxSpikeBars == 4 { cfg.sp2lMaxSpikeBars = 6 }
+            if cfg.sp2lMaxSpikeATR == 3.0 { cfg.sp2lMaxSpikeATR = 10.0 }
+            if cfg.sp2lMaxPressureGapBar == 3 { cfg.sp2lMaxPressureGapBar = 6 }
+            defaults.set(2, forKey: sp2lDefaultsVersionKey)
+            cfg.save()
+        }
         return cfg
     }
 

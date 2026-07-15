@@ -3,9 +3,8 @@ import Foundation
 /// SP2L (Spike-2Leg) setup detector.
 ///
 /// A valid setup starts from balance, breaks out with pressure (P-Gap),
-/// then places a limit order at the first pullback level. The fill is the
-/// pullback touching the last spike candle's low/high; no break-back
-/// confirmation is required.
+/// then waits for the first pullback level to be tested. Entry is confirmed
+/// only when a directional rejection candle closes back beyond that level.
 enum SP2LSetup {
     enum Direction: String, Hashable {
         case long
@@ -17,6 +16,7 @@ enum SP2LSetup {
         case entered
         case hitTP
         case hitSL
+        case invalidated
         case expired
     }
 
@@ -65,14 +65,14 @@ enum SP2LSetup {
     static func compute(
         _ candles: [Candle],
         minSpikeBars rawMinSpikeBars: Int = 2,
-        maxSpikeBars rawMaxSpikeBars: Int = 4,
+        maxSpikeBars rawMaxSpikeBars: Int = 6,
         rangeBars rawRangeBars: Int = 4,
         atrPeriod rawATRPeriod: Int = 14,
         minSpikeATR: Double = 1.0,
-        maxSpikeATR: Double = 3.0,
+        maxSpikeATR: Double = 10.0,
         maxRangeATR: Double = 1.5,
         minGapPct: Double = 0,
-        maxPressureGapBar rawMaxPressureGapBar: Int = 3,
+        maxPressureGapBar rawMaxPressureGapBar: Int = 6,
         emaPeriod rawEMAPeriod: Int = 60,
         useEMAContext: Bool = true,
         maxEMADistanceATR: Double = 1.0,
@@ -153,7 +153,7 @@ enum SP2LSetup {
         rangeBars: Int,
         minSpikeATR: Double,
         maxSpikeATR: Double,
-        maxRangeATR: Double,
+        maxRangeATR _: Double,
         minGapPct: Double,
         maxPressureGapBar: Int,
         useEMAContext: Bool,
@@ -173,18 +173,9 @@ enum SP2LSetup {
         let balanceHigh = balance.map(\.high).max() ?? candles[start - 1].high
         let balanceLow = balance.map(\.low).min() ?? candles[start - 1].low
         let referenceATR = atr[start - 1] ?? currentATR
-        guard referenceATR > 0,
-              balanceHigh - balanceLow <= maxRangeATR * referenceATR
-        else { return nil }
-
-        // Equilibrium is local, but the broken level must represent recent
-        // structure. With the defaults this looks back 12 bars instead of
-        // treating any four-bar micro-range as a meaningful level.
+        guard referenceATR > 0 else { return nil }
         let levelLookback = max(rangeBars, min(24, max(8, rangeBars * 3)))
         let levelStartIndex = max(0, start - levelLookback)
-        let levelContext = candles[levelStartIndex..<start]
-        let structuralHigh = levelContext.map(\.high).max() ?? balanceHigh
-        let structuralLow = levelContext.map(\.low).min() ?? balanceLow
 
         let direction = directionalStructure(
             candles,
@@ -194,41 +185,63 @@ enum SP2LSetup {
         )
         guard let direction else { return nil }
 
-        let spikeSlice = candles[start...end]
+        let brokenLevel = direction == .long ? balanceHigh : balanceLow
+
+        guard let breakout = pressureAndFollowThrough(
+            candles,
+            start: start,
+            end: end,
+            direction: direction,
+            minimumBody: referenceATR * 0.50
+        ) else { return nil }
+
+        // A rolling scan can begin one quiet candle before the displacement,
+        // but must not absorb several balance candles into the spike. Anchor
+        // the setup to the actual pressure breakout and require the selected
+        // end candle to still point with the move; the first opposite candle
+        // is the pullback, not part of the spike.
+        guard breakout.breakout - start <= 1 else { return nil }
+        let spikeStart = breakout.breakout
+        switch direction {
+        case .long where candles[end].close <= candles[end].open: return nil
+        case .short where candles[end].close >= candles[end].open: return nil
+        default: break
+        }
+
+        // Once the pressure leg starts, its first opposite candle is the
+        // pullback. Never absorb a later confirmation candle into the spike
+        // across that pullback.
+        let hasOppositeCandle = candles[spikeStart...end].contains { candle in
+            switch direction {
+            case .long: return candle.close < candle.open
+            case .short: return candle.close > candle.open
+            }
+        }
+        guard !hasOppositeCandle else { return nil }
+
+        let spikeSlice = candles[spikeStart...end]
         let spikeHigh = spikeSlice.map(\.high).max() ?? candles[end].high
         let spikeLow = spikeSlice.map(\.low).min() ?? candles[end].low
         let spikeMove = direction == .long
-            ? candles[end].close - candles[start].open
-            : candles[start].open - candles[end].close
+            ? candles[end].close - candles[spikeStart].open
+            : candles[spikeStart].open - candles[end].close
         guard spikeMove >= minSpikeATR * referenceATR,
               spikeMove <= maxSpikeATR * referenceATR
         else { return nil }
 
-        let brokenLevel = direction == .long ? structuralHigh : structuralLow
-
-        guard let breakout = breakoutAndFollowThrough(
-            candles,
-            start: start,
-            end: end,
-            level: brokenLevel,
-            direction: direction,
-            minimumDistance: referenceATR * 0.08,
-            minimumBody: referenceATR * 0.50
-        ) else { return nil }
-
         guard let gap = firstPressureGap(
             candles,
-            range: (start - 1)...end,
+            range: (spikeStart - 1)...end,
             direction: direction,
             minGapPct: minGapPct,
             maxPressureGapBar: maxPressureGapBar,
-            minimumGap: referenceATR * 0.05
+            minimumGap: referenceATR * 0.04
         ) else { return nil }
 
-        let contextEMA = ema[start]
+        let contextEMA = ema[spikeStart]
         if useEMAContext {
             guard let contextEMA else { return nil }
-            let distance = abs(candles[start].open - contextEMA)
+            let distance = abs(candles[spikeStart].open - contextEMA)
             guard distance <= maxEMADistanceATR * currentATR else { return nil }
             switch direction {
             case .long where candles[end].close <= contextEMA: return nil
@@ -237,10 +250,26 @@ enum SP2LSetup {
             }
         }
 
-        // The teacher's entry is a resting limit at the first pullback
-        // level: last spike low for longs, last spike high for shorts.
-        let entry = direction == .long ? candles[end].low : candles[end].high
+        // A touch of the first-pullback level is only a setup. Entry needs a
+        // directional rejection close before the spike origin/SL is lost.
+        let pullbackLevel = direction == .long ? candles[end].low : candles[end].high
         let stop = direction == .long ? spikeLow : spikeHigh
+        let pullbackOutcome = firstConfirmedPullback(
+            candles,
+            after: end,
+            maxBars: maxPullbackBars,
+            level: pullbackLevel,
+            stop: stop,
+            direction: direction,
+            tolerance: referenceATR * 0.10
+        )
+        let entry: Double
+        switch pullbackOutcome {
+        case .confirmed(_, let confirmationIndex):
+            entry = candles[confirmationIndex].close
+        case .waiting, .invalidated, .expired:
+            entry = pullbackLevel
+        }
         let risk = abs(entry - stop)
         guard risk > 0 else { return nil }
 
@@ -248,7 +277,7 @@ enum SP2LSetup {
             ? entry + risk * riskReward
             : entry - risk * riskReward
         var result = Result(
-            spikeStartIndex: start,
+            spikeStartIndex: spikeStart,
             spikeEndIndex: end,
             breakoutIndex: breakout.breakout,
             followThroughIndex: breakout.followThrough,
@@ -268,27 +297,25 @@ enum SP2LSetup {
             emaValue: contextEMA
         )
 
-        let limitOutcome = firstLimitFill(
-            candles,
-            after: end,
-            maxBars: maxPullbackBars,
-            entry: entry,
-            direction: direction
-        )
-        switch limitOutcome {
+        switch pullbackOutcome {
         case .waiting:
             break
         case .expired(let index):
             result.resolveIndex = index
             result.stage = .expired
-        case .filled(let index):
-            result.pullbackIndex = index
-            result.entryIndex = index
+        case .invalidated(let index):
+            result.resolveIndex = index
+            result.stage = .invalidated
+        case .confirmed(let touchIndex, let confirmationIndex):
+            result.pullbackIndex = touchIndex
+            result.entryIndex = confirmationIndex
             result.stage = .entered
             resolve(
                 &result,
                 candles: candles,
-                from: index,
+                // Entry happens at the confirmation close; its earlier wick
+                // cannot stop a trade that was not open at that time.
+                from: confirmationIndex + 1,
                 maxContinuationBars: maxContinuationBars,
                 targetCount: targetCount
             )
@@ -339,13 +366,11 @@ enum SP2LSetup {
         let followThrough: Int
     }
 
-    private static func breakoutAndFollowThrough(
+    private static func pressureAndFollowThrough(
         _ candles: [Candle],
         start: Int,
         end: Int,
-        level: Double,
         direction: Direction,
-        minimumDistance: Double,
         minimumBody: Double
     ) -> Breakout? {
         guard end > start else { return nil }
@@ -360,19 +385,13 @@ enum SP2LSetup {
             else { continue }
             switch direction {
             case .long:
-                let confirmationLevel = level + minimumDistance
-                if candle.close > confirmationLevel,
-                   candle.close > candle.open,
-                   candles[next].close > confirmationLevel,
+                if candle.close > candle.open,
                    candles[next].close > candles[i].close,
                    candles[next].close > candles[next].open {
                     return Breakout(breakout: i, followThrough: next)
                 }
             case .short:
-                let confirmationLevel = level - minimumDistance
-                if candle.close < confirmationLevel,
-                   candle.close < candle.open,
-                   candles[next].close < confirmationLevel,
+                if candle.close < candle.open,
                    candles[next].close < candles[i].close,
                    candles[next].close < candles[next].open {
                     return Breakout(breakout: i, followThrough: next)
@@ -429,28 +448,49 @@ enum SP2LSetup {
         return nil
     }
 
-    private enum LimitOutcome {
+    private enum PullbackOutcome {
         case waiting
-        case filled(Int)
+        case confirmed(touch: Int, confirmation: Int)
+        case invalidated(Int)
         case expired(Int)
     }
 
-    private static func firstLimitFill(
+    private static func firstConfirmedPullback(
         _ candles: [Candle],
         after spikeEnd: Int,
         maxBars: Int,
-        entry: Double,
-        direction: Direction
-    ) -> LimitOutcome {
+        level: Double,
+        stop: Double,
+        direction: Direction,
+        tolerance: Double
+    ) -> PullbackOutcome {
         let lo = spikeEnd + 1
         let hi = min(candles.count - 1, spikeEnd + maxBars)
         guard lo <= hi else { return .waiting }
+        var touchIndex: Int?
         for i in lo...hi {
+            let candle = candles[i]
             switch direction {
             case .long:
-                if candles[i].low <= entry { return .filled(i) }
+                if candle.low <= stop { return .invalidated(i) }
+                if touchIndex == nil, candle.low <= level + tolerance {
+                    touchIndex = i
+                }
+                if let touchIndex,
+                   candle.close > candle.open,
+                   candle.close > level {
+                    return .confirmed(touch: touchIndex, confirmation: i)
+                }
             case .short:
-                if candles[i].high >= entry { return .filled(i) }
+                if candle.high >= stop { return .invalidated(i) }
+                if touchIndex == nil, candle.high >= level - tolerance {
+                    touchIndex = i
+                }
+                if let touchIndex,
+                   candle.close < candle.open,
+                   candle.close < level {
+                    return .confirmed(touch: touchIndex, confirmation: i)
+                }
             }
         }
         if candles.count - 1 >= spikeEnd + maxBars {

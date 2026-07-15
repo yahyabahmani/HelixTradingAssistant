@@ -487,7 +487,8 @@ struct ChartView: View {
         let margin = max(8, (b.hi - b.lo) / 4)
         let lo = b.lo - margin
         let hi = b.hi + margin
-        return all.suffix(Self.maxSP2LSetupsOnChart).filter { r in
+        return all.filter { $0.stage != .invalidated }
+            .suffix(Self.maxSP2LSetupsOnChart).filter { r in
             guard sp2lResultFitsCurrentCandles(r) else { return false }
             let end = r.resolveIndex ?? lastIndex
             return end >= lo && r.spikeStartIndex <= hi
@@ -1824,7 +1825,21 @@ struct ChartView: View {
             )
             .symbolSize(0)
             .annotation(position: .top, alignment: .leading, spacing: 1) {
-                setupTag(r.direction == .long ? "SP2L LONG" : "SP2L SHORT", color: dirColor)
+                let direction = r.direction == .long ? "LONG" : "SHORT"
+                let state = r.entryIndex == nil ? "SETUP" : "ENTRY"
+                setupTag("SP2L \(state) \(direction)", color: dirColor)
+            }
+
+            if let entryIndex = r.entryIndex {
+                PointMark(
+                    x: .value("SP2L confirmed entry candle", Double(entryIndex)),
+                    y: .value("SP2L confirmed entry price", r.entry)
+                )
+                .foregroundStyle(dirColor)
+                .symbolSize(65)
+                .annotation(position: .top, alignment: .center, spacing: 4) {
+                    setupTag("ENTRY", color: dirColor)
+                }
             }
 
             if let ema = r.emaValue {
@@ -1878,7 +1893,7 @@ struct ChartView: View {
                     )
                     .symbolSize(0)
                     .annotation(position: .overlay, alignment: .trailing, spacing: 0) {
-                        setupTag("Limit pending", color: dirColor)
+                        setupTag("Wait confirmation", color: dirColor)
                     }
                 }
                 PointMark(

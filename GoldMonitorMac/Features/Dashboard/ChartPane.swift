@@ -104,6 +104,7 @@ final class MultiChartLayoutStore: ObservableObject {
     @Published var fullscreenPaneID: UUID?
 
     private static let storageKey = "dashboard.multichart.v3"
+    private static let sp2lDefaultsVersionKey = "dashboard.multichart.sp2lDefaults.version"
 
     private struct Payload: Codable {
         var layout: ChartLayoutKind
@@ -113,7 +114,21 @@ final class MultiChartLayoutStore: ObservableObject {
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
-           let payload = try? JSONDecoder().decode(Payload.self, from: data) {
+           var payload = try? JSONDecoder().decode(Payload.self, from: data) {
+            let defaults = UserDefaults.standard
+            if defaults.integer(forKey: Self.sp2lDefaultsVersionKey) < 2 {
+                var changed = false
+                for paneIndex in payload.panes.indices {
+                    for indicatorIndex in payload.panes[paneIndex].indicatorInstances.indices {
+                        changed = payload.panes[paneIndex].indicatorInstances[indicatorIndex]
+                            .migrateLegacySP2LDefaults() || changed
+                    }
+                }
+                defaults.set(2, forKey: Self.sp2lDefaultsVersionKey)
+                if changed, let migrated = try? JSONEncoder().encode(payload) {
+                    defaults.set(migrated, forKey: Self.storageKey)
+                }
+            }
             layout = payload.layout
             panes = payload.panes
             syncSymbol = payload.syncSymbol

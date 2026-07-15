@@ -19,6 +19,7 @@ struct DashboardView: View {
     /// persisted to UserDefaults. Each instance holds its kind, params,
     /// and hide/show state.
     private static let indicatorStorageKey = "dashboard.indicators.v2"
+    private static let sp2lInstanceDefaultsVersionKey = "dashboard.indicators.sp2lDefaults.version"
     private static let oscillatorStorageKey = "dashboard.oscillators.v2"
 
     @State private var indicatorInstances: [IndicatorInstance] = []
@@ -483,7 +484,10 @@ struct DashboardView: View {
             targetCount: oscillatorConfig.sp2lTargetCount
         )
         let context = "\(pairID)|\(timeframe.rawValue)"
-        let allKeys = Set(results.map(sp2lFormedEventKey))
+        var allKeys = Set(results.map(sp2lFormedEventKey))
+        allKeys.formUnion(results.compactMap { result in
+            result.entryIndex == nil ? nil : sp2lEntryEventKey(result)
+        })
 
         guard !seedOnly,
               sp2lAlertContext == context,
@@ -496,29 +500,55 @@ struct DashboardView: View {
         }
 
         for result in results {
-            guard result.followThroughIndex < closedCandles.count,
-                  closedCandles[result.followThroughIndex].id.timeIntervalSince1970 > previousTimestamp
-            else { continue }
-            let key = sp2lFormedEventKey(result)
-            guard !sp2lSeenEventKeys.contains(key) else { continue }
             let side = result.direction == .long ? "LONG" : "SHORT"
-            notificationInbox.record(
-                dedupKey: key,
-                cooldown: 10 * 365 * 24 * 60 * 60,
-                pairID: pairID,
-                pairLabel: pair.name,
-                category: .strategy,
-                title: "\(pair.name) - SP2L is forming",
-                body: "A \(side) SP2L setup has formed. Limit entry: \(PriceFormat.exact(result.entry)), stop: \(PriceFormat.exact(result.stopLoss)).",
-                timeframeLabel: timeframe.rawValue,
-                chartTarget: notificationTarget(
-                    pairID: pairID,
-                    indicator: .sp2lStrategy,
-                    candle: closedCandles[result.followThroughIndex],
-                    price: result.entry,
-                    label: "SP2L entry"
-                )
-            )
+            if result.followThroughIndex < closedCandles.count,
+               closedCandles[result.followThroughIndex].id.timeIntervalSince1970 > previousTimestamp {
+                let key = sp2lFormedEventKey(result)
+                if !sp2lSeenEventKeys.contains(key) {
+                    notificationInbox.record(
+                        dedupKey: key,
+                        cooldown: 10 * 365 * 24 * 60 * 60,
+                        pairID: pairID,
+                        pairLabel: pair.name,
+                        category: .strategy,
+                        title: "\(pair.name) - SP2L setup formed",
+                        body: "A \(side) setup formed. Watch pullback level \(PriceFormat.exact(result.entry)); do not enter until a confirmation candle closes.",
+                        timeframeLabel: timeframe.rawValue,
+                        chartTarget: notificationTarget(
+                            pairID: pairID,
+                            indicator: .sp2lStrategy,
+                            candle: closedCandles[result.followThroughIndex],
+                            price: result.entry,
+                            label: "SP2L setup"
+                        )
+                    )
+                }
+            }
+
+            if let entryIndex = result.entryIndex,
+               entryIndex < closedCandles.count,
+               closedCandles[entryIndex].id.timeIntervalSince1970 > previousTimestamp {
+                let key = sp2lEntryEventKey(result)
+                if !sp2lSeenEventKeys.contains(key) {
+                    notificationInbox.record(
+                        dedupKey: key,
+                        cooldown: 10 * 365 * 24 * 60 * 60,
+                        pairID: pairID,
+                        pairLabel: pair.name,
+                        category: .strategy,
+                        title: "\(pair.name) - SP2L entry confirmed",
+                        body: "The \(side) confirmation candle closed. Entry: \(PriceFormat.exact(result.entry)), stop: \(PriceFormat.exact(result.stopLoss)).",
+                        timeframeLabel: timeframe.rawValue,
+                        chartTarget: notificationTarget(
+                            pairID: pairID,
+                            indicator: .sp2lStrategy,
+                            candle: closedCandles[entryIndex],
+                            price: result.entry,
+                            label: "SP2L confirmed entry"
+                        )
+                    )
+                }
+            }
         }
 
         sp2lSeenEventKeys.formUnion(allKeys)
@@ -527,6 +557,10 @@ struct DashboardView: View {
 
     private func sp2lFormedEventKey(_ result: SP2LSetup.Result) -> String {
         "sp2l|\(app.selectedPairID ?? "")|\(timeframe.rawValue)|\(result.id)|formed"
+    }
+
+    private func sp2lEntryEventKey(_ result: SP2LSetup.Result) -> String {
+        "sp2l|\(app.selectedPairID ?? "")|\(timeframe.rawValue)|\(result.id)|entry|\(result.entryIndex ?? -1)"
     }
 
     private func refreshPinBarNotifications(seedOnly: Bool) {
@@ -1048,7 +1082,19 @@ struct DashboardView: View {
 
     private func loadIndicators() {
         if let data = UserDefaults.standard.data(forKey: Self.indicatorStorageKey),
-           let decoded = try? JSONDecoder().decode([IndicatorInstance].self, from: data) {
+           var decoded = try? JSONDecoder().decode([IndicatorInstance].self, from: data) {
+            let defaults = UserDefaults.standard
+            if defaults.integer(forKey: Self.sp2lInstanceDefaultsVersionKey) < 2 {
+                var changed = false
+                for index in decoded.indices {
+                    changed = decoded[index].migrateLegacySP2LDefaults() || changed
+                }
+                defaults.set(2, forKey: Self.sp2lInstanceDefaultsVersionKey)
+                if changed,
+                   let migrated = try? JSONEncoder().encode(decoded) {
+                    defaults.set(migrated, forKey: Self.indicatorStorageKey)
+                }
+            }
             indicatorInstances = decoded
         }
     }

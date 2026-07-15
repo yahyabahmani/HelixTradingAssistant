@@ -22,6 +22,7 @@ enum FarazHistorySource {
     /// Faraz when the user selects it as the data source.
     static let symbolByPairID: [String: String] = [
         "ounce": "XAU_USD",
+        "wti":   "WTICO_USD",
         "btc":   "BTCUSDT",
         "sol":   "SOLUSDT",
         "eth":   "ETHUSDT",

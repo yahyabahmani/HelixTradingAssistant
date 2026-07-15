@@ -62,6 +62,10 @@ extension TradingPair {
         // cTrader bridge takes over when running).
         .init(id: "ounce",    name: "Gold Ounce",       symbol: "XAU",  colorHex: "#EAB308", category: .forex),
 
+        // Commodity — WTI crude oil (Faraz WTICO_USD live, Yahoo CL=F
+        // history). Grouped under Forex like the metal.
+        .init(id: "wti",      name: "WTI Crude Oil",    symbol: "WTI",  colorHex: "#78350F", category: .forex),
+
         // Crypto — live from Twelve Data, history from Yahoo.
         .init(id: "btc",      name: "Bitcoin",          symbol: "BTC",  colorHex: "#F7931A", category: .crypto),
         .init(id: "sol",      name: "Solana",           symbol: "SOL",  colorHex: "#14F195", category: .crypto),

@@ -87,6 +87,83 @@ enum ChangeOfCharacter {
         var mid: Double { (high + low) / 2 }
     }
 
+    /// A CHoCH zone re-anchored from bar indices to wall-clock dates.
+    ///
+    /// `Zone` stores positions as integer bar indices into the candle
+    /// array it was computed from. To draw a *higher*-timeframe zone on a
+    /// *lower*-timeframe chart (whose X axis is that lower timeframe's bar
+    /// index) those indices are meaningless — bar 40 on 1H ≠ bar 40 on 5m.
+    /// So we swap each index for its candle's `bucketStart`; the chart then
+    /// maps every date back to its nearest lower-timeframe bar via
+    /// `barIndex(forDate:)`. Price levels are timeframe-independent and
+    /// carry over unchanged.
+    struct DatedZone: Identifiable, Hashable {
+        let obDate: Date
+        let chochDate: Date
+        let brokenLevel: Double
+        let isBullish: Bool
+        let hasFVG: Bool
+        let status: Status
+        let obLow: Double
+        let obHigh: Double
+        /// Union bounding box of every drawable element (for Y-domain fold).
+        let high: Double
+        let low: Double
+        let fvgLow: Double?
+        let fvgHigh: Double?
+        let fvgDate: Date?
+        let ifvgLow: Double?
+        let ifvgHigh: Double?
+        let ifvgDate: Date?
+
+        var id: String { "\(Int(chochDate.timeIntervalSince1970))-\(isBullish ? "bull" : "bear")" }
+    }
+
+    /// Compute CHoCH zones on `candles` (intended: a higher timeframe than
+    /// the chart currently shows) and re-anchor the last `maxZones` to
+    /// dates so they can be projected onto a lower-timeframe axis.
+    static func datedZones(
+        _ candles: [Candle],
+        swingLength: Int = 5,
+        minSwingPct: Double = 0.2,
+        requireFVG: Bool = false,
+        showMitigated: Bool = false,
+        maxZones: Int = 3
+    ) -> [DatedZone] {
+        let zones = compute(
+            candles,
+            swingLength: swingLength,
+            minSwingPct: minSwingPct,
+            requireFVG: requireFVG,
+            showMitigated: showMitigated,
+            maxZones: maxZones
+        )
+        func date(_ i: Int) -> Date? {
+            candles.indices.contains(i) ? candles[i].bucketStart : nil
+        }
+        return zones.compactMap { z in
+            guard let ob = date(z.obIndex), let choch = date(z.chochIndex) else { return nil }
+            return DatedZone(
+                obDate: ob,
+                chochDate: choch,
+                brokenLevel: z.brokenLevel,
+                isBullish: z.isBullish,
+                hasFVG: z.hasFVG,
+                status: z.status,
+                obLow: z.obLow,
+                obHigh: z.obHigh,
+                high: z.high,
+                low: z.low,
+                fvgLow: z.fvgLow,
+                fvgHigh: z.fvgHigh,
+                fvgDate: z.fvgIndex.flatMap(date),
+                ifvgLow: z.ifvgLow,
+                ifvgHigh: z.ifvgHigh,
+                ifvgDate: z.ifvgIndex.flatMap(date)
+            )
+        }
+    }
+
     /// Scan `candles` for CHoCH confluence zones.
     ///
     /// - swingLength:  pivot depth handed to `ZigZag` — bars of separation

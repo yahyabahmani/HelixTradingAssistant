@@ -252,6 +252,12 @@ struct OscillatorConfig: Codable, Equatable {
     var chochRequireFVG: Bool = false
     var chochShowMitigated: Bool = false
     var chochNotifyEvents: Bool = false
+    // Higher-timeframe CHoCH overlay: draw the last `chochHTFCount` zones
+    // from `chochHTFTimeframe` projected onto whatever (lower) timeframe
+    // is currently displayed. Reference-only context for LTF entries.
+    var chochHTFEnabled: Bool = false
+    var chochHTFTimeframe: String = "1h"
+    var chochHTFCount: Int = 3
 
     // Volume Profile parameters (session-based, see `VolumeProfile`).
     // `vpBucketCount` is the number of equal-price bands per session;
@@ -390,6 +396,9 @@ struct OscillatorConfig: Codable, Equatable {
         chochRequireFVG    = try c.decodeIfPresent(Bool.self,   forKey: .chochRequireFVG)    ?? false
         chochShowMitigated = try c.decodeIfPresent(Bool.self,   forKey: .chochShowMitigated) ?? false
         chochNotifyEvents  = try c.decodeIfPresent(Bool.self,   forKey: .chochNotifyEvents)  ?? false
+        chochHTFEnabled    = try c.decodeIfPresent(Bool.self,   forKey: .chochHTFEnabled)    ?? false
+        chochHTFTimeframe  = try c.decodeIfPresent(String.self, forKey: .chochHTFTimeframe)  ?? "1h"
+        chochHTFCount      = try c.decodeIfPresent(Int.self,    forKey: .chochHTFCount)      ?? 3
         vpBucketCount      = try c.decodeIfPresent(Int.self,    forKey: .vpBucketCount)      ?? 24
         vpValueAreaPct     = try c.decodeIfPresent(Double.self, forKey: .vpValueAreaPct)     ?? 70.0
         vpUseZigzag        = try c.decodeIfPresent(Bool.self,   forKey: .vpUseZigzag)        ?? true

@@ -53,6 +53,13 @@ struct ChartView: View {
     /// params (e.g. two SMAs at different periods).
     var indicatorInstances: [IndicatorInstance] = []
 
+    /// Higher-timeframe CHoCH zones projected onto this (lower) timeframe.
+    /// Computed by DashboardView from the configured HTF candles and
+    /// re-anchored to dates; ChartView maps each date to its nearest local
+    /// bar via `barIndex(forDate:)`. Reference-only context — drawn muted
+    /// and tagged "·HTF" to read as secondary to the live LTF zones.
+    var htfChochZones: [ChangeOfCharacter.DatedZone] = []
+
     /// Support / resistance levels the user added from an AI analysis.
     /// Empty by default; populated when the user clicks "Add to chart"
     /// on a Support & Resistance Claude run. Drawn as horizontal rules
@@ -186,6 +193,11 @@ struct ChartView: View {
     /// is applied against a stable reference (mirrors how
     /// `magnifyStartDomain` anchors the X pinch).
     @State private var yScaleStartDomain: ClosedRange<Double>?
+    /// Time-axis horizontal-scale gesture: the X window captured at the
+    /// start of a drag on the bottom time axis, held fixed so the scale
+    /// factor applies against a stable reference (mirrors
+    /// `yScaleStartDomain` for the price axis).
+    @State private var xScaleStartDomain: ClosedRange<Double>?
 
     /// In-progress drawing endpoints — captured on drag start, updated
     /// each frame, cleared on drag end. Lets the chart render a live
@@ -250,6 +262,11 @@ struct ChartView: View {
                 // it stays interactive, and on the right so it doesn't
                 // steal pan/hover from the main canvas.
                 .overlay(alignment: .trailing) { priceAxisScaleStrip }
+                // TradingView-style time-axis drag strip: a transparent
+                // strip over the bottom axis gutter that scales the X
+                // (time) axis horizontally. Inset on the trailing edge so
+                // it doesn't overlap the price-axis column at the corner.
+                .overlay(alignment: .bottom) { timeAxisScaleStrip }
                 .overlay(alignment: .topTrailing) { Group { if showHoverTooltip { hoverTooltip } } }
                 // No global .animation() modifiers here. Previously:
                 //   .animation(.easeOut(0.15), value: hovered)
@@ -685,6 +702,7 @@ struct ChartView: View {
             orderBlockMarks
             steroidOrderBlockMarks
             sonarlabOBMarks
+            htfChochMarks
             chochMarks
             scenarioMarks
             tradeMarks
@@ -2798,6 +2816,88 @@ struct ChartView: View {
         }
     }
 
+    /// Higher-timeframe CHoCH overlays. Same OB / FVG / iFVG / level /
+    /// label vocabulary as `chochMark`, but each element's X positions are
+    /// mapped from wall-clock dates onto this timeframe's bar-index axis
+    /// (`barIndex(forDate:)`), and everything is drawn muted + dashed with
+    /// a "·HTF" tag so it reads as secondary reference structure rather
+    /// than a live signal on the timeframe in view.
+    @ChartContentBuilder
+    private var htfChochMarks: some ChartContent {
+        let xEnd = Double(max(0, candles.count - 1))
+        ForEach(htfChochZones) { zone in
+            htfChochMark(for: zone, xEnd: xEnd)
+        }
+    }
+
+    @ChartContentBuilder
+    private func htfChochMark(for zone: ChangeOfCharacter.DatedZone, xEnd: Double) -> some ChartContent {
+        let baseColor: Color = zone.isBullish ? Theme.Color.success : Theme.Color.danger
+        let accentColor = IndicatorKind.changeOfCharacter.color
+        let fvgColor = Color(red: 0.30, green: 0.80, blue: 0.75)
+        // HTF zones are context, not the live signal — halve every fill so
+        // they sit visibly behind the current-timeframe CHoCH zones.
+        let dim = (zone.status == .fresh ? 1.0 : 0.6) * 0.5
+        let obX = barIndex(forDate: zone.obDate)
+        let chochX = barIndex(forDate: zone.chochDate)
+
+        // Order block layer.
+        if indicatorConfig.chochShowOB, let obX {
+            chochZoneRect(
+                id: "\(zone.id)-HTFOB", xStart: obX, xEnd: xEnd,
+                low: zone.obLow, high: zone.obHigh, color: baseColor,
+                fill: 0.12 * dim, dashed: true, tag: "OB·HTF"
+            )
+        }
+        // Displacement FVG layer.
+        if indicatorConfig.chochShowFVG,
+           let fl = zone.fvgLow, let fh = zone.fvgHigh,
+           let fd = zone.fvgDate, let fx = barIndex(forDate: fd) {
+            chochZoneRect(
+                id: "\(zone.id)-HTFFVG", xStart: fx, xEnd: xEnd,
+                low: fl, high: fh, color: fvgColor, fill: 0.16 * dim, dashed: true, tag: "FVG·HTF"
+            )
+        }
+        // Inverse FVG layer.
+        if indicatorConfig.chochShowIFVG,
+           let il = zone.ifvgLow, let ih = zone.ifvgHigh,
+           let idt = zone.ifvgDate, let ix = barIndex(forDate: idt) {
+            chochZoneRect(
+                id: "\(zone.id)-HTFIFVG", xStart: ix, xEnd: xEnd,
+                low: il, high: ih, color: accentColor, fill: 0.10 * dim, dashed: true, tag: "iFVG·HTF"
+            )
+        }
+
+        // Broken-structure level — dashed rule from the OB across to the break.
+        if let obX, let chochX {
+            RuleMark(
+                xStart: .value("HTF CHoCH lvl start", obX),
+                xEnd:   .value("HTF CHoCH lvl end",   chochX),
+                y:      .value("HTF CHoCH lvl",       zone.brokenLevel)
+            )
+            .foregroundStyle(accentColor.opacity(0.5))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+        }
+
+        // Break marker + label at the CHoCH bar.
+        if let chochX {
+            let tagText = zone.isBullish ? "CHoCH↑ HTF" : "CHoCH↓ HTF"
+            PointMark(
+                x: .value("HTF CHoCH label x", chochX),
+                y: .value("HTF CHoCH label y", zone.brokenLevel)
+            )
+            .symbolSize(0)
+            .annotation(position: zone.isBullish ? .top : .bottom, alignment: .center, spacing: 2) {
+                Text(tagText)
+                    .font(.system(size: 7, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(accentColor.opacity(0.85)))
+            }
+        }
+    }
+
     /// Volume Profile — either zigzag-based (last trend, right side) or
     /// session-based (per-day histograms), depending on `vpUseZigzag`.
     @ChartContentBuilder
@@ -4199,6 +4299,61 @@ struct ChartView: View {
             .onEnded { _ in yScaleStartDomain = nil }
     }
 
+    /// Transparent gesture strip over the bottom time-axis gutter.
+    /// Dragging it horizontally scales the X axis (TradingView's time-
+    /// scale drag): drag LEFT to zoom out (compress candles), RIGHT to
+    /// zoom in (stretch them). Double-click clears the manual window and
+    /// hands the axis back to the default view. Trailing padding leaves
+    /// the price-axis column's corner alone. Height roughly matches the
+    /// axis-label gutter so it doesn't eat the chart canvas's pan area.
+    private var timeAxisScaleStrip: some View {
+        GeometryReader { geo in
+            Rectangle()
+                .fill(Color.clear)
+                .contentShape(Rectangle())
+                .gesture(timeScaleDrag(plotWidth: geo.size.width))
+                // Double-click the axis → back to the default window,
+                // matching the price axis's double-click-to-auto-fit.
+                .onTapGesture(count: 2) { xDomain = nil }
+                // Resize cursor on hover so the strip reads as draggable.
+                .onHover { inside in
+                    if inside { NSCursor.resizeLeftRight.push() }
+                    else      { NSCursor.pop() }
+                }
+        }
+        .frame(height: 28)
+        // Keep clear of the trailing price-axis scale column so a corner
+        // drag doesn't fight between the two gestures.
+        .padding(.trailing, 48)
+    }
+
+    /// Horizontal drag → X-axis scale. Anchors on the bar window captured
+    /// at drag start (`xScaleStartDomain`) and keeps its centre fixed, so
+    /// candles grow/shrink around the middle of the view. The factor is
+    /// exponential in drag distance so the feel is consistent whether
+    /// zoomed in or out (mirrors `priceScaleDrag`).
+    private func timeScaleDrag(plotWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                if xScaleStartDomain == nil {
+                    xScaleStartDomain = effectiveXDomain
+                    hovered = nil
+                }
+                guard let start = xScaleStartDomain, plotWidth > 0 else { return }
+                let center = (start.lowerBound + start.upperBound) / 2
+                let halfSpan = (start.upperBound - start.lowerBound) / 2
+                guard halfSpan > 0 else { return }
+                // Drag left (−width) ⇒ factor > 1 ⇒ wider time window ⇒
+                // smaller candles. Drag right ⇒ factor < 1 ⇒ zoom in.
+                // Clamp so a frantic drag can't collapse or explode it.
+                let raw = exp(Double(-value.translation.width) / Double(plotWidth) * 1.6)
+                let factor = min(max(raw, 0.1), 10)
+                let newHalf = halfSpan * factor
+                xDomain = (center - newHalf) ... (center + newHalf)
+            }
+            .onEnded { _ in xScaleStartDomain = nil }
+    }
+
     // MARK: - Volume Profile
 
     @ChartContentBuilder
@@ -4383,6 +4538,10 @@ struct ChartView: View {
             if zone.high > hi { hi = zone.high }
         }
         for zone in chochZones {
+            if zone.low < lo { lo = zone.low }
+            if zone.high > hi { hi = zone.high }
+        }
+        for zone in htfChochZones {
             if zone.low < lo { lo = zone.low }
             if zone.high > hi { hi = zone.high }
         }

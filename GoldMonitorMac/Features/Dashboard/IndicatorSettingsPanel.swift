@@ -21,6 +21,7 @@ struct IndicatorSettingsPanel: View {
                 }
             }
             .frame(maxHeight: 320)
+            resetFooter
         }
         .padding(Theme.Spacing.md)
         .frame(width: 280)
@@ -34,6 +35,32 @@ struct IndicatorSettingsPanel: View {
                 .stroke(Theme.Color.border, lineWidth: 1)
         )
         .offset(floatOffset)
+    }
+
+    /// "Reset to defaults" affordance, shown only when the indicator has
+    /// tunable parameters to reset. Resets every param to its spec default
+    /// and pushes the change live like any other edit.
+    @ViewBuilder
+    private var resetFooter: some View {
+        if !instance.kind.paramSpecs.isEmpty {
+            Divider().background(Theme.Color.border)
+            HStack {
+                Button("Reset to defaults") { resetToDefaults() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.Color.textSecondary)
+                Spacer()
+            }
+        }
+    }
+
+    private func resetToDefaults() {
+        var copy = instance
+        for spec in instance.kind.paramSpecs {
+            copy.params[spec.key] = spec.defaultValue
+        }
+        instance = copy
+        onUpdate(copy)
     }
 
     private var panelDragGesture: some Gesture {
@@ -188,6 +215,7 @@ struct OscillatorSettingsPanel: View {
                 }
             }
             .frame(maxHeight: 320)
+            resetFooter
         }
         .padding(Theme.Spacing.md)
         .frame(width: 280)
@@ -209,6 +237,32 @@ struct OscillatorSettingsPanel: View {
                 )}
                 .onEnded { _ in floatOrigin = floatOffset }
         )
+    }
+
+    /// "Reset to defaults" affordance, shown only when the oscillator has
+    /// tunable parameters to reset. Resets every param to its spec default
+    /// and pushes the change live like any other edit.
+    @ViewBuilder
+    private var resetFooter: some View {
+        if !instance.kind.paramSpecs.isEmpty {
+            Divider().background(Theme.Color.border)
+            HStack {
+                Button("Reset to defaults") { resetToDefaults() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.Color.textSecondary)
+                Spacer()
+            }
+        }
+    }
+
+    private func resetToDefaults() {
+        var copy = instance
+        for spec in instance.kind.paramSpecs {
+            copy.params[spec.key] = spec.defaultValue
+        }
+        instance = copy
+        onUpdate(copy)
     }
 
     @ViewBuilder

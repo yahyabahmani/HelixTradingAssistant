@@ -338,6 +338,15 @@ enum IndicatorKind: String, CaseIterable, Identifiable, Hashable, Codable {
                 .bool(key: "showIFVG", label: "Show inverse FVG (iFVG)", default: false),
                 .bool(key: "requireFVG", label: "Require FVG confluence", default: false),
                 .bool(key: "showMitigated", label: "Show mitigated zones", default: false),
+                .bool(key: "htfEnabled", label: "Higher-timeframe zones", default: false),
+                .enum(key: "htfTimeframe", label: "HTF timeframe", default: "1h", options: [
+                    ParamOption(label: "15m", value: "15m"),
+                    ParamOption(label: "30m", value: "30m"),
+                    ParamOption(label: "1H", value: "1h"),
+                    ParamOption(label: "4H", value: "4h"),
+                    ParamOption(label: "1D", value: "1d"),
+                ]),
+                .double(key: "htfCount", label: "HTF zones to show", default: 3, step: 1, range: 1...8),
             ]
         case .volumeProfile:
             return [

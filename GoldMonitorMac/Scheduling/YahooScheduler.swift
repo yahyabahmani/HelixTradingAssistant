@@ -167,6 +167,8 @@ final class YahooScheduler: ObservableObject {
     private let pairs: [PairConfig] = [
         .init(pairID: "ounce", yahooSymbol: "GC=F",    twelveDataSymbol: "XAU/USD",
               respectsWeekend: true,  goldAPIFallback: true),
+        .init(pairID: "wti",   yahooSymbol: "CL=F",    twelveDataSymbol: nil,
+              respectsWeekend: true,  goldAPIFallback: false),
         .init(pairID: "btc",   yahooSymbol: "BTC-USD", twelveDataSymbol: "BTC/USD",
               respectsWeekend: false, goldAPIFallback: false),
         .init(pairID: "sol",   yahooSymbol: "SOL-USD", twelveDataSymbol: "SOL/USD",

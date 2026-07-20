@@ -11,6 +11,23 @@ options:
   groupSortPosition: top
   developmentLanguage: en
 
+# Explicit schemes — defining ANY scheme stops xcodegen's per-target
+# auto-scheme generation, so both apps are listed. The Mac scheme wires
+# HelixTradingAppTests into its test action (`xcodebuild test`).
+schemes:
+  HelixTradingApp:
+    build:
+      targets:
+        HelixTradingApp: all
+        HelixTradingAppTests: [test]
+    test:
+      targets:
+        - HelixTradingAppTests
+  HelixTradingAppiPad:
+    build:
+      targets:
+        HelixTradingAppiPad: all
+
 settings:
   base:
     SWIFT_VERSION: "5.9"

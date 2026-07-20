@@ -12,6 +12,11 @@ struct ChartViewiPad: View {
     let indicators: Set<IndicatorKind>
     let indicatorConfig: OscillatorConfig
 
+    /// Higher-timeframe CHoCH zones (dated so they re-anchor onto the
+    /// current, lower timeframe via `barIndex(forDate:)`). Computed
+    /// upstream in `ChartPlotiPad`; empty unless the CHoCH HTF option is on.
+    var htfChochZones: [ChangeOfCharacter.DatedZone] = []
+
     var srLevels: PromptBuilder.SRLevels = .init(support: [], resistance: [])
     var fvgZones: [PromptBuilder.FVGZone] = []
     var supplyDemandZones: [PromptBuilder.SupplyDemandZone] = []
@@ -19,6 +24,10 @@ struct ChartViewiPad: View {
     var taAltScenario: PromptBuilder.TAScenario? = nil
     var drawings: [ChartDrawing] = []
     var activeTool: DrawingTool = .none
+
+    /// Contract spec for the pair on screen — drives position-tool
+    /// sizing. Passed down because the chart is otherwise pair-agnostic.
+    var contractSpec: ContractSpec = .forPair(id: "ounce")
     var onCommitDrawing: ((ChartDrawing) -> Void)? = nil
     var onMoveDrawing: ((ChartDrawing) -> Void)? = nil
     var selectedDrawingID: UUID? = nil
@@ -28,7 +37,21 @@ struct ChartViewiPad: View {
     var livePrice: Double? = nil
     var replayActive: Bool = false
 
+    /// ForexFactory economic-calendar events plotted as impact-coloured
+    /// flags on the bottom time axis (see `NewsChartLayer`). Already
+    /// currency/impact-filtered by `NewsStore.chartEvents`; the chart
+    /// maps each `eventAt` to a bar and draws only the visible ones.
+    var newsEvents: [ForexFactoryEvent] = []
+    /// Display zone for the news popup timestamp (`NewsStore.effectiveTimeZone`).
+    var newsTimeZone: TimeZone = .current
+
     @State private var hovered: HoverState?
+
+    /// The news event whose flag was tapped, if any — drives the
+    /// floating detail popover. Anchor is the flag point in the overlay
+    /// coordinate space.
+    @State private var selectedNews: ForexFactoryEvent?
+    @State private var newsPopupAnchor: CGPoint = .zero
     @StateObject private var derived = ChartDerivedCache()
     @State private var dragStartDomain: ClosedRange<Double>?
     @State private var dragStartYDomain: ClosedRange<Double>?
@@ -117,6 +140,30 @@ struct ChartViewiPad: View {
         return Array(filtered.suffix(6))
     }
 
+
+    /// Volume-Filtered Order Blocks — swing-anchored, volume-tagged zones.
+    private var volumeFilteredOBZones: [VolumeFilteredOrderBlocks.Zone] {
+        guard indicators.contains(.volumeFilteredOrderBlock) else { return [] }
+        let cfg = indicatorConfig
+        return derived.volumeFilteredOrderBlocks(
+            candles: candles,
+            swingLength: cfg.vfobSwingLength,
+            invalidationWick: cfg.vfobInvalidation == "Wick",
+            maxZonesPerSide: Self.vfobZoneCount(cfg.vfobZoneCount),
+            showHistoric: cfg.vfobShowHistoric,
+            combine: true
+        ).zones
+    }
+
+    static func vfobZoneCount(_ preset: String) -> Int {
+        switch preset {
+        case "One":    return 1
+        case "Medium": return 5
+        case "High":   return 10
+        default:       return 3   // "Low"
+        }
+    }
+
     private var sonarlabOBZones: [SonarlabOrderBlocks.Zone] {
         guard indicators.contains(.sonarlabOrderBlock) else { return [] }
         let mitType: SonarlabOrderBlocks.MitigationType =
@@ -129,6 +176,16 @@ struct ChartViewiPad: View {
         return Array(all.suffix(Self.maxSonarlabOBs))
     }
     private static let maxSonarlabOBs = 20
+
+    /// Ranked Order Block zones — swing-structure OBs graded A/B/C by
+    /// Volume Profile + Ichimoku confluence.
+    private var rankedOBZones: [RankedOrderBlocks.Zone] {
+        guard indicators.contains(.rankedOrderBlock) else { return [] }
+        return derived.rankedOrderBlocks(
+            candles: candles,
+            config: indicatorConfig.rankedOrderBlockConfiguration
+        )
+    }
 
     /// Change of Character confluence zones — structure break + OB/FVG.
     private var chochZones: [ChangeOfCharacter.Zone] {
@@ -244,8 +301,66 @@ struct ChartViewiPad: View {
         return indices.allSatisfy { $0 >= 0 && $0 <= upper }
     }
 
+    private var pinBarComboResults: [PinBarComboSetup.Result] {
+        guard indicators.contains(.pinBarCombo) else { return [] }
+        let bases = derived.sp2lSetup(candles: candles, config: indicatorConfig)
+        let all = derived.pinBarComboSetup(
+            candles: candles,
+            sp2lResults: bases,
+            config: indicatorConfig
+        )
+        guard !all.isEmpty,
+              let bounds = ChartWindow.visibleBounds(domain: effectiveXDomain, count: candles.count)
+        else { return [] }
+        let margin = max(8, (bounds.hi - bounds.lo) / 4)
+        return all.suffix(6).filter { result in
+            pinBarComboResultFitsCurrentCandles(result)
+                && result.lastRelevantIndex >= bounds.lo - margin
+                && result.structureStartIndex <= bounds.hi + margin
+        }
+    }
+
+    private func pinBarComboResultFitsCurrentCandles(_ result: PinBarComboSetup.Result) -> Bool {
+        let upper = candles.count - 1
+        guard upper >= 0 else { return false }
+        let indices = [
+            result.structureStartIndex,
+            result.breakoutIndex,
+            result.confirmationIndex
+        ] + [result.resolveIndex].compactMap { $0 }
+        return indices.allSatisfy { $0 >= 0 && $0 <= upper }
+    }
+
+    private var mtrResults: [MTRSetup.Result] {
+        guard indicators.contains(.mtrStrategy) else { return [] }
+        let all = derived.mtrSetup(candles: candles, config: indicatorConfig)
+        guard !all.isEmpty,
+              let bounds = ChartWindow.visibleBounds(domain: effectiveXDomain, count: candles.count)
+        else { return [] }
+        let margin = max(8, (bounds.hi - bounds.lo) / 4)
+        return all.suffix(5).filter { result in
+            mtrResultFitsCurrentCandles(result)
+                && result.lastRelevantIndex >= bounds.lo - margin
+                && result.channelStartIndex <= bounds.hi + margin
+        }
+    }
+
+    private func mtrResultFitsCurrentCandles(_ result: MTRSetup.Result) -> Bool {
+        let upper = candles.count - 1
+        guard upper >= 0 else { return false }
+        let required = [
+            result.channelStartIndex,
+            result.channelEndIndex,
+            result.trendExtremeIndex,
+            result.breakoutIndex,
+            result.retestIndex,
+            result.lastRelevantIndex
+        ] + [result.confirmationIndex, result.resolveIndex].compactMap { $0 }
+        return required.allSatisfy { $0 >= 0 && $0 <= upper }
+    }
+
     private var volumeProfileSessions: [VolumeProfile.SessionVP] {
-        guard indicators.contains(.volumeProfile), !indicatorConfig.vpUseZigzag else { return [] }
+        guard indicators.contains(.volumeProfile), indicatorConfig.vpMode == "session" else { return [] }
         return derived.volumeProfile(
             candles: candles,
             bucketCount: indicatorConfig.vpBucketCount,
@@ -254,7 +369,7 @@ struct ChartViewiPad: View {
     }
 
     private var zigzagTrendVP: VolumeProfile.TrendVP? {
-        guard indicators.contains(.volumeProfile), indicatorConfig.vpUseZigzag else { return nil }
+        guard indicators.contains(.volumeProfile), indicatorConfig.vpMode == "zigzag" else { return nil }
         return derived.zigzagVolumeProfile(
             candles: candles,
             bucketCount: indicatorConfig.vpBucketCount,
@@ -264,9 +379,26 @@ struct ChartViewiPad: View {
         )
     }
 
+    /// Visible-range Volume Profile: histogram of the bars currently in
+    /// view plus ranked high-volume levels. Used in "visible" mode.
+    private var visibleRangeVP: VolumeProfile.VisibleRangeVP? {
+        guard indicators.contains(.volumeProfile), indicatorConfig.vpMode == "visible" else { return nil }
+        let domain = effectiveXDomain
+        let lo = max(0, Int(domain.lowerBound.rounded(.down)))
+        let hi = min(candles.count - 1, Int(domain.upperBound.rounded(.up)))
+        guard hi > lo else { return nil }
+        return derived.visibleRangeVolumeProfile(
+            candles: candles,
+            barRange: lo...hi,
+            bucketCount: indicatorConfig.vpBucketCount,
+            valueAreaPct: indicatorConfig.vpValueAreaPct,
+            levelCount: indicatorConfig.vpLevelCount
+        )
+    }
+
     private var zigzagPivots: [ZigZag.Pivot] {
         guard indicators.contains(.volumeProfile),
-              indicatorConfig.vpUseZigzag,
+              indicatorConfig.vpMode == "zigzag",
               indicatorConfig.vpShowZigzag else { return [] }
         return derived.zigzagPivots(
             candles: candles,
@@ -278,7 +410,10 @@ struct ChartViewiPad: View {
     private var chart: some View {
         Group {
             let indices = renderIndices
-            let indexSet = Set(indices)
+            // Range bounds for visible-index checks — avoids allocating
+            // a Set<Int> on every frame (60-120×/sec during pan/zoom).
+            let visLo = indices.first ?? 0
+            let visHi = indices.last ?? 0
 
             Chart {
                 if let last = displayCandles.last {
@@ -314,7 +449,9 @@ struct ChartViewiPad: View {
                 zigzagLineMarks
                 setupMarks
                 sp2lMarks
+                pinBarComboMarks
                 microMapMarks
+                mtrMarks
                 srLevelMarks
                 fvgMarks
                 indicatorFvgMarks
@@ -322,7 +459,10 @@ struct ChartViewiPad: View {
                 orderBlockMarks
                 steroidOrderBlockMarks
                 sonarlabOBMarks
+                rankedOBMarks
+                volumeFilteredOBMarks
                 chochMarks
+                htfChochMarks
                 scenarioMarks
                 tradeMarks
                 journalMarks
@@ -334,8 +474,8 @@ struct ChartViewiPad: View {
                 case .candle, .heikinAshi:   candleMarks(indices: indices)
                 }
 
-                indicatorMarks(visible: indexSet)
-                utBotMarks(indices: indices, visible: indexSet)
+                indicatorMarks(visLo: visLo, visHi: visHi)
+                utBotMarks(indices: indices, visLo: visLo, visHi: visHi)
 
                 if let h = hovered, h.index < displayCandles.count {
                     let dc = displayCandles[h.index]
@@ -392,45 +532,121 @@ struct ChartViewiPad: View {
             .chartOverlay { proxy in
                 GeometryReader { geo in
                     let plotFrame = geo[proxy.plotAreaFrame]
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onContinuousHover { phase in
-                            switch phase {
-                            case .active(let location):
-                                let x = location.x - plotFrame.origin.x
-                                let y = location.y - plotFrame.origin.y
-                                guard plotFrame.size.width > 0,
-                                      x >= 0, x <= plotFrame.size.width,
-                                      y >= 0, y <= plotFrame.size.height,
-                                      let xValue: Double = proxy.value(atX: x)
-                                else { return }
-                                let idx = max(0, min(candles.count - 1, Int(xValue.rounded())))
-                                let yPrice: Double = proxy.value(atY: y) ?? candles[idx].close
-                                hovered = HoverState(
-                                    candle: candles[idx],
-                                    index: idx,
-                                    cursor: location,
-                                    cursorPrice: yPrice
-                                )
-                            case .ended:
-                                hovered = nil
+                    ZStack(alignment: .topLeading) {
+                        Rectangle()
+                            .fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let x = location.x - plotFrame.origin.x
+                                    let y = location.y - plotFrame.origin.y
+                                    guard plotFrame.size.width > 0,
+                                          x >= 0, x <= plotFrame.size.width,
+                                          y >= 0, y <= plotFrame.size.height,
+                                          let xValue: Double = proxy.value(atX: x)
+                                    else { return }
+                                    let idx = max(0, min(candles.count - 1, Int(xValue.rounded())))
+                                    let yPrice: Double = proxy.value(atY: y) ?? candles[idx].close
+                                    hovered = HoverState(
+                                        candle: candles[idx],
+                                        index: idx,
+                                        cursor: location,
+                                        cursorPrice: yPrice
+                                    )
+                                case .ended:
+                                    hovered = nil
+                                }
                             }
+                            .simultaneousGesture(ipadDragGesture(
+                                plotWidth: plotFrame.size.width,
+                                plotHeight: plotFrame.size.height,
+                                plotOrigin: plotFrame.origin,
+                                proxy: proxy
+                            ))
+                            .simultaneousGesture(magnificationGesture())
+                            .onTapGesture(count: 2) {
+                                resetChart()
+                            }
+                            // Single-tap on a bottom-axis news flag opens
+                            // its detail popover; a tap that misses every
+                            // flag dismisses an open one. Runs alongside
+                            // the double-tap-to-reset above.
+                            .simultaneousGesture(
+                                SpatialTapGesture(count: 1).onEnded { value in
+                                    if let hit = newsHitTest(
+                                        at: value.location,
+                                        plotOrigin: plotFrame.origin,
+                                        plotHeight: plotFrame.size.height,
+                                        proxy: proxy
+                                    ) {
+                                        selectedNews = hit.event
+                                        newsPopupAnchor = hit.anchor
+                                    } else if selectedNews != nil {
+                                        selectedNews = nil
+                                    }
+                                }
+                            )
+
+                        newsFlagsLayer(proxy: proxy, plotFrame: plotFrame)
+                            .allowsHitTesting(false)
+
+                        if let ev = selectedNews {
+                            newsPopupLayer(event: ev, plotFrame: plotFrame)
                         }
-                        .simultaneousGesture(ipadDragGesture(
-                            plotWidth: plotFrame.size.width,
-                            plotHeight: plotFrame.size.height,
-                            plotOrigin: plotFrame.origin,
-                            proxy: proxy
-                        ))
-                        .simultaneousGesture(magnificationGesture())
-                        .onTapGesture(count: 2) {
-                            xDomain = nil
-                            yDomain = nil
-                        }
+                    }
                 }
             }
         }
+    }
+
+    // MARK: - News layer (flags + popover)
+
+    @ViewBuilder
+    private func newsFlagsLayer(proxy: ChartProxy, plotFrame: CGRect) -> some View {
+        ForEach(visibleNewsMarkers) { m in
+            if let px = proxy.position(forX: m.barIndex) {
+                NewsFlagView(color: m.color)
+                    .position(x: plotFrame.origin.x + px, y: plotFrame.maxY - 9)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func newsPopupLayer(event: ForexFactoryEvent, plotFrame: CGRect) -> some View {
+        let cardWidth: CGFloat = 240
+        let halfW = cardWidth / 2 + 6
+        let clampedX = min(max(newsPopupAnchor.x, plotFrame.minX + halfW),
+                           plotFrame.maxX - halfW)
+        let clampedY = max(plotFrame.minY + 70, newsPopupAnchor.y - 84)
+        NewsMarkerPopover(event: event, timeZone: newsTimeZone) {
+            selectedNews = nil
+        }
+        .position(x: clampedX, y: clampedY)
+    }
+
+    /// Was a tap on a bottom-axis news flag? Returns the event + the
+    /// flag's anchor (overlay coordinates). Only the bottom ~30px band
+    /// is live (touch targets are bigger than the mouse's 26px).
+    private func newsHitTest(
+        at location: CGPoint,
+        plotOrigin: CGPoint,
+        plotHeight: CGFloat,
+        proxy: ChartProxy
+    ) -> (event: ForexFactoryEvent, anchor: CGPoint)? {
+        guard location.y >= plotOrigin.y + plotHeight - 30 else { return nil }
+        var best: (dist: CGFloat, event: ForexFactoryEvent, anchor: CGPoint)?
+        for m in visibleNewsMarkers {
+            guard let px = proxy.position(forX: m.barIndex) else { continue }
+            let sx = plotOrigin.x + px
+            let d = abs(location.x - sx)
+            guard d <= 18 else { continue }
+            if best == nil || d < best!.dist {
+                best = (d, m.event, CGPoint(x: sx, y: plotOrigin.y + plotHeight - 9))
+            }
+        }
+        guard let b = best else { return nil }
+        return (b.event, b.anchor)
     }
 
     // MARK: - iPad drag (pan + draw)
@@ -465,6 +681,53 @@ struct ChartViewiPad: View {
 
                 // Pan / axis-scale mode — never while a pinch owns the domains.
                 guard magnifyStartDomain == nil else { return }
+
+                // Cursor mode: decide once, on the first frame, whether
+                // this touch grabbed a handle, a drawing body, or the
+                // chart itself. The choice sticks for the gesture so a
+                // drag can't switch modes mid-flight.
+                let alreadyChose =
+                    editingDrawingID != nil ||
+                    movingDrawingOriginal != nil ||
+                    dragStartDomain != nil
+                if !alreadyChose, !drawings.isEmpty {
+                    if let sel = selectionTargetDrawing,
+                       let anchor = hitTestHandle(
+                            of: sel,
+                            at: value.startLocation,
+                            plotOrigin: plotOrigin,
+                            proxy: proxy
+                       ) {
+                        editingDrawingID = sel.id
+                        editingHandle = anchor
+                        editingCursor = drawingPoint(at: value.startLocation, plotOrigin: plotOrigin, proxy: proxy)
+                        hovered = nil
+                    } else if let hit = hitTestDrawing(
+                        at: value.startLocation,
+                        plotOrigin: plotOrigin,
+                        proxy: proxy
+                    ) {
+                        movingDrawingOriginal = hit
+                        movingDeltaTime = 0
+                        movingDeltaPrice = 0
+                        hovered = nil
+                    }
+                }
+
+                if editingDrawingID != nil {
+                    editingCursor = drawingPoint(at: value.location, plotOrigin: plotOrigin, proxy: proxy)
+                    dragHadMovement = true
+                    return
+                }
+                if movingDrawingOriginal != nil {
+                    if let s = drawingPoint(at: value.startLocation, plotOrigin: plotOrigin, proxy: proxy),
+                       let n = drawingPoint(at: value.location, plotOrigin: plotOrigin, proxy: proxy) {
+                        movingDeltaTime  = n.date.timeIntervalSince(s.date)
+                        movingDeltaPrice = n.price - s.price
+                        dragHadMovement = true
+                    }
+                    return
+                }
 
                 if dragStartDomain == nil {
                     dragStartDomain = effectiveXDomain
@@ -532,9 +795,33 @@ struct ChartViewiPad: View {
                 }
             }
             .onEnded { value in
+                let hadMovement = dragHadMovement
+                dragHadMovement = false
+
                 if activeTool != .none {
                     commitDrawing(value, plotOrigin: plotOrigin, proxy: proxy)
                     return
+                }
+                if editingDrawingID != nil {
+                    handleResizeEnd()
+                    return
+                }
+                if let moving = movingDrawingOriginal {
+                    if hadMovement {
+                        handleMoveEnd()
+                    } else {
+                        // A tap without movement means "select", not
+                        // "move" — same rule as the Mac build.
+                        onSelectDrawing?(moving.id)
+                        movingDrawingOriginal = nil
+                        movingDeltaTime = 0
+                        movingDeltaPrice = 0
+                    }
+                    return
+                }
+                // Tap on empty chart clears the selection.
+                if !hadMovement, selectedDrawingID != nil {
+                    onSelectDrawing?(nil)
                 }
                 dragStartDomain = nil
                 dragStartYDomain = nil
@@ -558,8 +845,46 @@ struct ChartViewiPad: View {
         guard let barX: Double = proxy.value(atX: xInPlot),
               let priceY: Double = proxy.value(atY: yInPlot)
         else { return nil }
-        let idx = max(0, min(candles.count - 1, Int(barX.rounded())))
+        // Past either end of the series, project the date off the bar
+        // spacing instead of clamping — otherwise anything dragged into
+        // the empty right margin pins onto the newest candle and a
+        // drawing can never sit ahead of price.
+        let lastIdx = candles.count - 1
+        if let step = barIntervalSeconds {
+            if barX > Double(lastIdx) {
+                let ahead = barX - Double(lastIdx)
+                return DrawingPoint(
+                    date: candles[lastIdx].bucketStart.addingTimeInterval(ahead * step),
+                    price: priceY
+                )
+            }
+            if barX < 0 {
+                return DrawingPoint(
+                    date: candles[0].bucketStart.addingTimeInterval(barX * step),
+                    price: priceY
+                )
+            }
+        }
+        let idx = max(0, min(lastIdx, Int(barX.rounded())))
         return DrawingPoint(date: candles[idx].bucketStart, price: priceY)
+    }
+
+    /// Seconds between consecutive bars, used to project dates past
+    /// either end of the series. Median of the recent spacings so a
+    /// trailing weekend/session gap doesn't fling right-margin
+    /// drawings far into the future.
+    private var barIntervalSeconds: TimeInterval? {
+        let n = candles.count
+        guard n >= 2 else { return nil }
+        var diffs: [TimeInterval] = []
+        diffs.reserveCapacity(min(n - 1, 20))
+        for i in max(1, n - 20)..<n {
+            let d = candles[i].bucketStart.timeIntervalSince(candles[i - 1].bucketStart)
+            if d > 0 { diffs.append(d) }
+        }
+        guard !diffs.isEmpty else { return nil }
+        diffs.sort()
+        return diffs[diffs.count / 2]
     }
 
     /// Finalise the in-flight drawing and hand it to the dashboard.
@@ -595,7 +920,46 @@ struct ChartViewiPad: View {
         case .volumeProfile:
             guard hasDrag else { return }
             onCommitDrawing?(ChartDrawing(kind: .volumeProfile, start: start, end: end))
+        case .longPosition, .shortPosition:
+            // Drag height sets the stop distance; a tap falls back to
+            // 0.5% of price so the box is never zero-height (which
+            // would divide by zero in the metrics).
+            let dragged = abs(end.price - start.price)
+            let stopDistance = dragged > 0 ? dragged : abs(start.price) * 0.005
+            guard stopDistance > 0 else { return }
+            let rightDate = end.date > start.date
+                ? end.date
+                : defaultPositionRightEdge(from: start.date)
+            onCommitDrawing?(ChartDrawing.position(
+                long: activeTool == .longPosition,
+                entry: start,
+                end: DrawingPoint(date: rightDate, price: start.price),
+                stopDistance: stopDistance,
+                balance: defaultPositionBalance,
+                riskPercent: defaultPositionRisk
+            ))
         }
+    }
+
+    /// Right edge for a position committed without a horizontal drag —
+    /// far enough forward to be grabbable, clamped to the last candle.
+    private func defaultPositionRightEdge(from start: Date) -> Date {
+        guard let startIdx = barIndex(closestTo: start), !candles.isEmpty else { return start }
+        let idx = min(candles.count - 1, startIdx + 20)
+        return candles[idx].bucketStart
+    }
+
+    /// Seeded from the Risk Calculator's stored settings so a new
+    /// position starts with the user's usual sizing; each position
+    /// keeps its own copy afterwards.
+    private var defaultPositionBalance: Double {
+        let stored = UserDefaults.standard.double(forKey: "riskcalc.accountBalance")
+        return stored > 0 ? stored : 10_000
+    }
+
+    private var defaultPositionRisk: Double {
+        let stored = UserDefaults.standard.double(forKey: "riskcalc.riskPercent")
+        return stored > 0 ? stored : 1.0
     }
 
     // MARK: - Pinch-to-zoom (throttled)
@@ -638,8 +1002,40 @@ struct ChartViewiPad: View {
         return ChartWindow.defaultDomain(count: candles.count)
     }
 
+    /// Reset to the default recent-bars window with the price scale
+    /// framed to the *candles* (not indicators/overlays), matching the
+    /// Mac chart's Reset. Pins an explicit Y so the double-tap doesn't
+    /// hand the axis back to the overlay-inclusive auto-fit.
+    private func resetChart() {
+        guard candles.count > 0 else { xDomain = nil; yDomain = nil; return }
+        let domain = ChartWindow.defaultDomain(count: candles.count)
+        yDomain = ChartWindow.candleYDomain(candles: candles, domain: domain)
+        xDomain = domain
+    }
+
     private var renderIndices: [Int] {
         ChartWindow.renderIndices(domain: effectiveXDomain, count: candles.count)
+    }
+
+    /// News events resolved to bar indices and clipped to the visible
+    /// window (see `ChartView.visibleNewsMarkers` for the rationale).
+    private var visibleNewsMarkers: [NewsChartMarker] {
+        guard !newsEvents.isEmpty, candles.count > 1 else { return [] }
+        let firstTs = candles.first!.bucketStart.timeIntervalSince1970
+        let barSpan = candles[candles.count - 1].bucketStart
+            .timeIntervalSince(candles[candles.count - 2].bucketStart)
+        let lastTs = candles.last!.bucketStart.timeIntervalSince1970 + max(barSpan, 1)
+        let domain = effectiveXDomain
+        var markers: [NewsChartMarker] = []
+        for ev in newsEvents {
+            guard let at = ev.eventAt else { continue }
+            let ts = at.timeIntervalSince1970
+            guard ts >= firstTs, ts <= lastTs else { continue }
+            guard let bx = barIndex(forDate: at) else { continue }
+            guard bx >= domain.lowerBound - 1, bx <= domain.upperBound + 1 else { continue }
+            markers.append(NewsChartMarker(id: ev.id, barIndex: bx, event: ev))
+        }
+        return markers
     }
 
     // MARK: - Line marks
@@ -965,97 +1361,234 @@ struct ChartViewiPad: View {
 
     // MARK: - Volume Profile marks
 
+    /// Three modes, switched by `indicatorConfig.vpMode`: "session"
+    /// (per-trading-day histograms), "zigzag" (last trend segment,
+    /// right margin) and "visible" (visible window + ranked levels).
     @ChartContentBuilder
     private var volumeProfileMarks: some ChartContent {
-        if indicatorConfig.vpUseZigzag {
-            zigzagVPMarks
-        } else {
-            sessionVPMarks
+        switch indicatorConfig.vpMode {
+        case "session": sessionVPMarks
+        case "visible": visibleRangeVPMarks
+        default:        zigzagVPMarks
+        }
+    }
+
+    /// Right-margin geometry for the margin-anchored modes: the
+    /// histogram hugs the visible right edge so it stays on screen
+    /// while panning.
+    private var vpMargin: (rightEdge: Double, width: Double) {
+        let domain = effectiveXDomain
+        let width = max(6, min(24, (domain.upperBound - domain.lowerBound) * 0.18))
+        return (domain.upperBound, width)
+    }
+
+    /// Two-tone histogram bars (up-volume success-tinted, down-volume
+    /// danger-tinted), right-anchored; buckets outside the value area
+    /// are dimmed, the POC row emphasised. POC/VA membership comes from
+    /// the precomputed indices.
+    @ChartContentBuilder
+    private func vpHistogramMarks(
+        buckets: [VolumeProfile.Bucket],
+        bucketSize: Double,
+        pocIndex: Int,
+        vaLowIndex: Int,
+        vaHighIndex: Int,
+        rightEdge: Double,
+        maxWidth: Double,
+        tag: String
+    ) -> some ChartContent {
+        let maxVol = buckets.map(\.volume).max() ?? 1
+        ForEach(Array(buckets.enumerated()), id: \.offset) { idx, bucket in
+            let totalW = maxWidth * (bucket.volume / maxVol)
+            let upW = maxWidth * (bucket.upVolume / maxVol)
+            let inVA = idx >= vaLowIndex && idx <= vaHighIndex
+            let opacity: Double = idx == pocIndex ? 0.85 : (inVA ? 0.55 : 0.25)
+            RectangleMark(
+                xStart: .value("\(tag) d0", rightEdge - totalW),
+                xEnd:   .value("\(tag) d1", rightEdge - upW),
+                yStart: .value("\(tag) dy0", bucket.priceLevel),
+                yEnd:   .value("\(tag) dy1", bucket.priceLevel + bucketSize * 0.92)
+            )
+            .foregroundStyle(Theme.Color.danger.opacity(opacity))
+            RectangleMark(
+                xStart: .value("\(tag) u0", rightEdge - upW),
+                xEnd:   .value("\(tag) u1", rightEdge),
+                yStart: .value("\(tag) uy0", bucket.priceLevel),
+                yEnd:   .value("\(tag) uy1", bucket.priceLevel + bucketSize * 0.92)
+            )
+            .foregroundStyle(Theme.Color.success.opacity(opacity))
+        }
+    }
+
+    /// "No volume data" note — the profile is time-at-price, not true
+    /// volume, when every candle lacked volume.
+    @ChartContentBuilder
+    private func vpTPONote(x: Double, y: Double) -> some ChartContent {
+        PointMark(x: .value("VP TPO x", x), y: .value("VP TPO y", y))
+            .symbolSize(0)
+            .annotation(position: .top, alignment: .trailing, spacing: 2) {
+                Text("TPO · no volume data")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Theme.Color.textMuted)
+            }
+    }
+
+    @ChartContentBuilder
+    private var visibleRangeVPMarks: some ChartContent {
+        if let vp = visibleRangeVP {
+            let margin = vpMargin
+
+            vpHistogramMarks(
+                buckets: vp.buckets,
+                bucketSize: vp.bucketSize,
+                pocIndex: vp.pocIndex,
+                vaLowIndex: vp.vaLowIndex,
+                vaHighIndex: vp.vaHighIndex,
+                rightEdge: margin.rightEdge,
+                maxWidth: margin.width,
+                tag: "VRVP"
+            )
+
+            ForEach(vp.levels, id: \.price) { level in
+                RuleMark(
+                    xStart: .value("VR L x0", Double(vp.startBar)),
+                    xEnd:   .value("VR L x1", Double(vp.endBar)),
+                    y:      .value("VR L y", level.price)
+                )
+                .foregroundStyle(
+                    level.isPOC
+                        ? Color(red: 0.96, green: 0.36, blue: 0.36).opacity(0.9)
+                        : Theme.Color.info.opacity(0.25 + 0.55 * level.strength)
+                )
+                .lineStyle(StrokeStyle(
+                    lineWidth: level.isPOC ? 2 : 1 + level.strength,
+                    dash: level.isPOC ? [] : [6, 3]
+                ))
+                .annotation(position: .top, alignment: .trailing, spacing: 0) {
+                    Text(Self.priceExact(level.price))
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(
+                            level.isPOC ? Color(red: 0.96, green: 0.36, blue: 0.36) : Theme.Color.textMuted
+                        )
+                        .padding(.horizontal, 3)
+                        .background(
+                            Theme.Color.surfaceMax.opacity(0.85),
+                            in: RoundedRectangle(cornerRadius: 3)
+                        )
+                }
+            }
+
+            if !vp.hasRealVolume {
+                vpTPONote(x: margin.rightEdge, y: vp.vah)
+            }
         }
     }
 
     @ChartContentBuilder
     private var zigzagVPMarks: some ChartContent {
         if let vp = zigzagTrendVP {
-            let maxVol = vp.buckets.map(\.volume).max() ?? 1
+            let margin = vpMargin
             let lastBar = Double(candles.count - 1)
-            let marginStart = lastBar + 1.0
-            let marginWidth = 20.0
-            let bucketSize = vp.buckets.count > 1
-                ? (vp.buckets[1].priceLevel - vp.buckets[0].priceLevel)
-                : vp.buckets[0].priceLevel * 0.001
 
-            ForEach(Array(vp.buckets.enumerated()), id: \.offset) { _, bucket in
-                let barWidth = marginWidth * (bucket.volume / maxVol)
-                let isPOC = abs(bucket.priceLevel - vp.poc) < bucketSize * 0.01
-                RectangleMark(
-                    xStart: .value("ZVP x0", marginStart + marginWidth - barWidth),
-                    xEnd:   .value("ZVP x1", marginStart + marginWidth),
-                    yStart: .value("ZVP y0", bucket.priceLevel),
-                    yEnd:   .value("ZVP y1", bucket.priceLevel + bucketSize * 0.92)
-                )
-                .foregroundStyle(
-                    isPOC
-                        ? Color(red: 0.96, green: 0.36, blue: 0.36).opacity(0.85)
-                        : Theme.Color.info.opacity(0.45)
-                )
+            vpHistogramMarks(
+                buckets: vp.buckets,
+                bucketSize: vp.bucketSize,
+                pocIndex: vp.pocIndex,
+                vaLowIndex: vp.vaLowIndex,
+                vaHighIndex: vp.vaHighIndex,
+                rightEdge: margin.rightEdge,
+                maxWidth: margin.width,
+                tag: "ZVP"
+            )
+
+            // POC — developing ray to the visible right edge.
+            RuleMark(
+                xStart: .value("ZVP POC x0", Double(vp.startBar)),
+                xEnd:   .value("ZVP POC x1", margin.rightEdge),
+                y:      .value("ZVP POC", vp.poc)
+            )
+            .foregroundStyle(Color(red: 0.96, green: 0.36, blue: 0.36))
+            .lineStyle(StrokeStyle(lineWidth: 1.5))
+
+            // VAH / VAL — scoped to the trend segment.
+            RuleMark(
+                xStart: .value("ZVP VAH x0", Double(vp.startBar)),
+                xEnd:   .value("ZVP VAH x1", lastBar),
+                y:      .value("ZVP VAH", vp.vah)
+            )
+            .foregroundStyle(Theme.Color.info.opacity(0.7))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+
+            RuleMark(
+                xStart: .value("ZVP VAL x0", Double(vp.startBar)),
+                xEnd:   .value("ZVP VAL x1", lastBar),
+                y:      .value("ZVP VAL", vp.val)
+            )
+            .foregroundStyle(Theme.Color.info.opacity(0.7))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+
+            if !vp.hasRealVolume {
+                vpTPONote(x: margin.rightEdge, y: vp.vah)
             }
-
-            RuleMark(y: .value("ZVP POC", vp.poc))
-                .foregroundStyle(Color(red: 0.96, green: 0.36, blue: 0.36))
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
-            RuleMark(y: .value("ZVP VAH", vp.vah))
-                .foregroundStyle(Theme.Color.info.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-            RuleMark(y: .value("ZVP VAL", vp.val))
-                .foregroundStyle(Theme.Color.info.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
         }
     }
 
     @ChartContentBuilder
     private var sessionVPMarks: some ChartContent {
         let sessions = volumeProfileSessions
+        let lastBar = Double(candles.count - 1)
         ForEach(sessions) { session in
-            let maxVol = session.buckets.map(\.volume).max() ?? 1
             let sessionWidth = Double(session.endBar - session.startBar)
-            let maxBarWidth = sessionWidth * 0.25
+            let maxBarWidth = max(2, sessionWidth * 0.25)
             let rightEdge = Double(session.endBar)
-            let bucketSize = session.buckets.count > 1
-                ? (session.buckets[1].priceLevel - session.buckets[0].priceLevel)
-                : session.buckets[0].priceLevel * 0.001
+            let isLatest = session.id == sessions.last?.id
+            let lineEnd = isLatest ? lastBar + 8 : rightEdge
 
-            ForEach(Array(session.buckets.enumerated()), id: \.offset) { _, bucket in
-                let barWidth = maxBarWidth * (bucket.volume / maxVol)
-                let isPOC = abs(bucket.priceLevel - session.poc) < bucketSize * 0.01
-                RectangleMark(
-                    xStart: .value("VP x0", rightEdge - barWidth),
-                    xEnd:   .value("VP x1", rightEdge),
-                    yStart: .value("VP y0", bucket.priceLevel),
-                    yEnd:   .value("VP y1", bucket.priceLevel + bucketSize * 0.92)
-                )
-                .foregroundStyle(
-                    isPOC
-                        ? Color(red: 0.96, green: 0.36, blue: 0.36).opacity(0.85)
-                        : Theme.Color.info.opacity(0.45)
-                )
-            }
+            vpHistogramMarks(
+                buckets: session.buckets,
+                bucketSize: session.bucketSize,
+                pocIndex: session.pocIndex,
+                vaLowIndex: session.vaLowIndex,
+                vaHighIndex: session.vaHighIndex,
+                rightEdge: rightEdge,
+                maxWidth: maxBarWidth,
+                tag: "VP\(session.id)"
+            )
 
-            RuleMark(y: .value("VP POC", session.poc))
-                .foregroundStyle(Color(red: 0.96, green: 0.36, blue: 0.36))
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
-            RuleMark(y: .value("VP VAH", session.vah))
-                .foregroundStyle(Theme.Color.info.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-            RuleMark(y: .value("VP VAL", session.val))
-                .foregroundStyle(Theme.Color.info.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            // POC / VAH / VAL — scoped to the session's bar range; the
+            // latest session's levels project a few bars forward.
+            RuleMark(
+                xStart: .value("VP POC x0", Double(session.startBar)),
+                xEnd:   .value("VP POC x1", lineEnd),
+                y:      .value("VP POC", session.poc)
+            )
+            .foregroundStyle(Color(red: 0.96, green: 0.36, blue: 0.36))
+            .lineStyle(StrokeStyle(lineWidth: 1.5))
+
+            RuleMark(
+                xStart: .value("VP VAH x0", Double(session.startBar)),
+                xEnd:   .value("VP VAH x1", lineEnd),
+                y:      .value("VP VAH", session.vah)
+            )
+            .foregroundStyle(Theme.Color.info.opacity(0.7))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+
+            RuleMark(
+                xStart: .value("VP VAL x0", Double(session.startBar)),
+                xEnd:   .value("VP VAL x1", lineEnd),
+                y:      .value("VP VAL", session.val)
+            )
+            .foregroundStyle(Theme.Color.info.opacity(0.7))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
 
             if session.startBar > 0 {
                 RuleMark(x: .value("VP sep", Double(session.startBar) - 0.5))
                     .foregroundStyle(Theme.Color.textMuted.opacity(0.15))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 4]))
             }
+        }
+        if let latest = sessions.last, !latest.hasRealVolume {
+            vpTPONote(x: Double(latest.endBar), y: latest.vah)
         }
     }
 
@@ -1400,6 +1933,281 @@ struct ChartViewiPad: View {
         return "MICROMAP \(direction) · \(quality) \(result.confluence.score)/6"
     }
 
+    // MARK: - Pin Bar Combo marks
+
+    @ChartContentBuilder
+    private var pinBarComboMarks: some ChartContent {
+        let lastIndex = max(0, candles.count - 1)
+        ForEach(pinBarComboResults) { result in
+            let color = pinBarComboColor(result.direction)
+            let confirmation = Double(result.confirmationIndex)
+            let start = Double(result.breakoutIndex)
+            let end = Double(result.resolveIndex ?? lastIndex)
+
+            RuleMark(
+                xStart: .value("Pin Bar level start", start),
+                xEnd: .value("Pin Bar level end", end),
+                y: .value("Pin Bar tested level", result.level)
+            )
+            .foregroundStyle(IndicatorKind.pinBarCombo.color.opacity(0.75))
+            .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [4, 3]))
+
+            RectangleMark(
+                xStart: .value("Pin Bar candle start", confirmation - 0.34),
+                xEnd: .value("Pin Bar candle end", confirmation + 0.34),
+                yStart: .value("Pin Bar low", result.pinBarLow),
+                yEnd: .value("Pin Bar high", result.pinBarHigh)
+            )
+            .foregroundStyle(color.opacity(0.16))
+
+            PointMark(
+                x: .value("Pin Bar confirmation x", confirmation),
+                y: .value(
+                    "Pin Bar confirmation y",
+                    result.direction == .long ? result.pinBarLow : result.pinBarHigh
+                )
+            )
+            .symbolSize(68)
+            .foregroundStyle(color)
+            .annotation(
+                position: result.direction == .long ? .bottom : .top,
+                alignment: .center,
+                spacing: 3
+            ) {
+                setupTag(result.kind == .sp2l ? "PIN · SP2L" : "PIN · BTB", color: color)
+            }
+
+            RuleMark(
+                xStart: .value("Pin Bar entry start", confirmation),
+                xEnd: .value("Pin Bar entry end", end),
+                y: .value("Pin Bar entry", result.entry)
+            )
+            .foregroundStyle(color.opacity(0.95))
+            .lineStyle(StrokeStyle(lineWidth: 1.5))
+
+            RuleMark(
+                xStart: .value("Pin Bar SL start", confirmation),
+                xEnd: .value("Pin Bar SL end", end),
+                y: .value("Pin Bar SL", result.stopLoss)
+            )
+            .foregroundStyle(Theme.Color.danger.opacity(0.9))
+            .lineStyle(StrokeStyle(lineWidth: 1.2))
+
+            RuleMark(
+                xStart: .value("Pin Bar TP start", confirmation),
+                xEnd: .value("Pin Bar TP end", end),
+                y: .value("Pin Bar TP", result.takeProfit)
+            )
+            .foregroundStyle(Theme.Color.success.opacity(0.9))
+            .lineStyle(StrokeStyle(lineWidth: 1.2))
+
+            PointMark(
+                x: .value("Pin Bar entry label x", end),
+                y: .value("Pin Bar entry label y", result.entry)
+            )
+            .symbolSize(0)
+            .annotation(position: .overlay, alignment: .trailing, spacing: 0) {
+                setupTag(pinBarComboStatusLabel(result), color: color)
+            }
+
+            PointMark(
+                x: .value("Pin Bar SL label x", end),
+                y: .value("Pin Bar SL label y", result.stopLoss)
+            )
+            .symbolSize(0)
+            .annotation(position: .overlay, alignment: .trailing, spacing: 0) {
+                setupTag("SL", color: Theme.Color.danger)
+            }
+
+            PointMark(
+                x: .value("Pin Bar TP label x", end),
+                y: .value("Pin Bar TP label y", result.takeProfit)
+            )
+            .symbolSize(0)
+            .annotation(position: .overlay, alignment: .trailing, spacing: 0) {
+                setupTag(
+                    "TP R\(String(format: "%.2g", indicatorConfig.pinBarRiskReward))",
+                    color: Theme.Color.success
+                )
+            }
+        }
+    }
+
+    private func pinBarComboColor(_ direction: PinBarComboSetup.Direction) -> Color {
+        direction == .long ? Theme.Color.success : Theme.Color.danger
+    }
+
+    private func pinBarComboStatusLabel(_ result: PinBarComboSetup.Result) -> String {
+        switch result.status {
+        case .active: return result.direction == .long ? "LONG active" : "SHORT active"
+        case .hitTP: return "Target hit"
+        case .hitSL: return "Stopped"
+        case .expired: return "Time exit"
+        }
+    }
+
+    // MARK: - Major Trend Reversal marks
+
+    @ChartContentBuilder
+    private var mtrMarks: some ChartContent {
+        let lastIndex = max(0, candles.count - 1)
+        ForEach(mtrResults) { result in
+            let color = mtrDirectionColor(result.direction)
+            let isForming = result.stage == .forming
+            let opacity = isForming ? 0.55 : (result.stage == .expired ? 0.30 : 0.90)
+            let channelDelta = result.channelEndIndex - result.channelStartIndex
+            let slope = channelDelta == 0 ? 0 :
+                (result.channelEndPrice - result.channelStartPrice) / Double(channelDelta)
+            let projectedMain = result.channelStartPrice
+                + slope * Double(result.breakoutIndex - result.channelStartIndex)
+            let parallelOffset = result.parallelStartPrice - result.channelStartPrice
+            let projectedParallel = projectedMain + parallelOffset
+            let planEnd = Double(result.resolveIndex ?? lastIndex)
+
+            ForEach([0, 1], id: \.self) { endpoint in
+                LineMark(
+                    x: .value(
+                        "MTR channel x",
+                        endpoint == 0 ? Double(result.channelStartIndex) : Double(result.breakoutIndex)
+                    ),
+                    y: .value(
+                        "MTR channel y",
+                        endpoint == 0 ? result.channelStartPrice : projectedMain
+                    ),
+                    series: .value("MTR channel series", "mtr-main-\(result.id)")
+                )
+                .foregroundStyle(IndicatorKind.mtrStrategy.color.opacity(opacity))
+                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+
+                LineMark(
+                    x: .value(
+                        "MTR parallel x",
+                        endpoint == 0 ? Double(result.channelStartIndex) : Double(result.breakoutIndex)
+                    ),
+                    y: .value(
+                        "MTR parallel y",
+                        endpoint == 0 ? result.parallelStartPrice : projectedParallel
+                    ),
+                    series: .value("MTR parallel series", "mtr-parallel-\(result.id)")
+                )
+                .foregroundStyle(IndicatorKind.mtrStrategy.color.opacity(opacity * 0.65))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+
+            RuleMark(
+                xStart: .value("MTR old extreme start", Double(result.trendExtremeIndex)),
+                xEnd: .value("MTR old extreme end", Double(result.retestIndex)),
+                y: .value("MTR old extreme", result.trendExtremePrice)
+            )
+            .foregroundStyle(color.opacity(opacity * 0.65))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+
+            RuleMark(
+                xStart: .value("MTR neckline start", Double(result.breakoutIndex)),
+                xEnd: .value("MTR neckline end", planEnd),
+                y: .value("MTR neckline", result.neckline)
+            )
+            .foregroundStyle(color.opacity(opacity))
+            .lineStyle(StrokeStyle(lineWidth: 1.4, dash: [5, 3]))
+
+            PointMark(
+                x: .value("MTR retest x", Double(result.retestIndex)),
+                y: .value("MTR retest y", result.retestPrice)
+            )
+            .symbolSize(isForming ? 54 : 72)
+            .foregroundStyle(color.opacity(opacity))
+            .annotation(
+                position: result.direction == .long ? .bottom : .top,
+                alignment: .center,
+                spacing: 3
+            ) {
+                setupTag("MTR · \(result.variant.label)", color: color.opacity(opacity))
+            }
+
+            if let confirmation = result.confirmationIndex {
+                PointMark(
+                    x: .value("MTR confirmation x", Double(confirmation)),
+                    y: .value("MTR confirmation y", candles[confirmation].close)
+                )
+                .symbolSize(82)
+                .foregroundStyle(color)
+                .annotation(
+                    position: result.direction == .long ? .top : .bottom,
+                    alignment: .center,
+                    spacing: 3
+                ) {
+                    setupTag(
+                        result.direction == .long ? "MTR LONG confirmed" : "MTR SHORT confirmed",
+                        color: color
+                    )
+                }
+            }
+
+            if let entry = result.entry,
+               let stop = result.stopLoss,
+               let target = result.takeProfit,
+               let confirmation = result.confirmationIndex {
+                let planStart = Double(confirmation)
+                RuleMark(
+                    xStart: .value("MTR entry start", planStart),
+                    xEnd: .value("MTR entry end", planEnd),
+                    y: .value("MTR entry", entry)
+                )
+                .foregroundStyle(color.opacity(opacity))
+                .lineStyle(StrokeStyle(lineWidth: 1.5))
+
+                RuleMark(
+                    xStart: .value("MTR stop start", planStart),
+                    xEnd: .value("MTR stop end", planEnd),
+                    y: .value("MTR stop", stop)
+                )
+                .foregroundStyle(Theme.Color.danger.opacity(opacity))
+                .lineStyle(StrokeStyle(lineWidth: 1.3))
+
+                RuleMark(
+                    xStart: .value("MTR target start", planStart),
+                    xEnd: .value("MTR target end", planEnd),
+                    y: .value("MTR target", target)
+                )
+                .foregroundStyle(Theme.Color.success.opacity(opacity))
+                .lineStyle(StrokeStyle(lineWidth: 1.3))
+
+                PointMark(x: .value("MTR status x", planEnd), y: .value("MTR status y", entry))
+                    .symbolSize(0)
+                    .annotation(position: .overlay, alignment: .trailing, spacing: 0) {
+                        setupTag(mtrStatusLabel(result), color: color.opacity(opacity))
+                    }
+                PointMark(x: .value("MTR SL x", planEnd), y: .value("MTR SL y", stop))
+                    .symbolSize(0)
+                    .annotation(position: .overlay, alignment: .trailing, spacing: 0) {
+                        setupTag("SL", color: Theme.Color.danger.opacity(opacity))
+                    }
+                PointMark(x: .value("MTR TP x", planEnd), y: .value("MTR TP y", target))
+                    .symbolSize(0)
+                    .annotation(position: .overlay, alignment: .trailing, spacing: 0) {
+                        setupTag(
+                            "TP R\(String(format: "%.2g", indicatorConfig.mtrRiskReward))",
+                            color: Theme.Color.success.opacity(opacity)
+                        )
+                    }
+            }
+        }
+    }
+
+    private func mtrDirectionColor(_ direction: MTRSetup.Direction) -> Color {
+        direction == .long ? Theme.Color.success : Theme.Color.danger
+    }
+
+    private func mtrStatusLabel(_ result: MTRSetup.Result) -> String {
+        switch result.stage {
+        case .forming: return "MTR forming"
+        case .confirmed: return result.direction == .long ? "LONG active" : "SHORT active"
+        case .hitTP: return "Target hit"
+        case .hitSL: return "Stopped"
+        case .expired: return "Expired"
+        }
+    }
+
     private func setupTag(_ text: String, color: Color) -> some View {
         Text(text)
             .font(.system(size: 8, weight: .heavy))
@@ -1601,6 +2409,125 @@ struct ChartViewiPad: View {
         }
     }
 
+
+    // MARK: - Ranked order block marks
+
+    /// Ranked Order Blocks. Unlike the other OB layers these carry a
+    /// grade: A zones are drawn boldly, B at half strength, C in
+    /// neutral grey. A breaker (price traded through it) stops at the
+    /// break bar and switches to a dashed grey outline.
+    @ChartContentBuilder
+    private var rankedOBMarks: some ChartContent {
+        let lastIndex = candles.count - 1
+        ForEach(rankedOBZones) { zone in
+            rankedOBMark(for: zone, lastIndex: lastIndex)
+        }
+    }
+
+    @ChartContentBuilder
+    private func rankedOBMark(for zone: RankedOrderBlocks.Zone, lastIndex: Int) -> some ChartContent {
+        let style = Self.rankedOBStyle(for: zone)
+        let xStart = Double(zone.startIndex)
+        let xEnd   = Double(min(zone.endIndex, lastIndex))
+        let edge = StrokeStyle(
+            lineWidth: zone.isCombined ? 2 : 1,
+            dash: zone.isBreaker ? [4, 3] : []
+        )
+
+        RectangleMark(
+            xStart: .value("ROB start", xStart),
+            xEnd:   .value("ROB end",   xEnd),
+            yStart: .value("ROB low",   zone.bottom),
+            yEnd:   .value("ROB high",  zone.top)
+        )
+        .foregroundStyle(style.base.opacity(style.fillOpacity))
+
+        RuleMark(
+            xStart: .value("ROB start hi", xStart),
+            xEnd:   .value("ROB end hi",   xEnd),
+            y:      .value("ROB hi",       zone.top)
+        )
+        .foregroundStyle(style.base.opacity(style.borderOpacity))
+        .lineStyle(edge)
+
+        RuleMark(
+            xStart: .value("ROB start lo", xStart),
+            xEnd:   .value("ROB end lo",   xEnd),
+            y:      .value("ROB lo",       zone.bottom)
+        )
+        .foregroundStyle(style.base.opacity(style.borderOpacity))
+        .lineStyle(edge)
+
+        // Badge sits centred inside the zone, like the Pine original's
+        // box text. Anchoring it at the right edge (as the other OB
+        // layers do) puts it flush against the price axis, where the
+        // plot area clips it away entirely.
+        if indicatorConfig.robShowLabels {
+            PointMark(
+                x: .value("ROB label x", Self.rankedOBLabelX(
+                    xStart: xStart, xEnd: xEnd, domain: effectiveXDomain
+                )),
+                y: .value("ROB label y", (zone.top + zone.bottom) / 2)
+            )
+            .symbolSize(0)
+            .annotation(position: .overlay, alignment: .center, spacing: 0) {
+                // `.fixedSize()` is load-bearing: an overlay annotation on
+                // a zero-size PointMark is proposed zero width, which
+                // truncates the badge down to an unreadable sliver.
+                Text(Self.rankedOBBadge(for: zone))
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(style.base.opacity(0.85)))
+            }
+        }
+    }
+
+    /// Where along the zone to park its badge. Zones run from the order
+    /// block to the right edge of the chart, so a plain midpoint lands
+    /// off-screen on an old zone once the user pans. Clamp it into the
+    /// part of the zone that is actually visible, inset from the plot
+    /// edges so the capsule isn't clipped.
+    private static func rankedOBLabelX(
+        xStart: Double,
+        xEnd: Double,
+        domain: ClosedRange<Double>
+    ) -> Double {
+        let inset = (domain.upperBound - domain.lowerBound) * 0.05
+        let lo = max(xStart, domain.lowerBound + inset)
+        let hi = min(xEnd, domain.upperBound - inset)
+        return lo <= hi ? (lo + hi) / 2 : (xStart + xEnd) / 2
+    }
+
+    /// Badge text: grade + score, with the zone's lifecycle state
+    /// appended so a merged or broken zone reads at a glance.
+    private static func rankedOBBadge(for zone: RankedOrderBlocks.Zone) -> String {
+        var text = zone.badge
+        if zone.isCombined { text += " ·M" }
+        if zone.isBreaker  { text += " ·BRK" }
+        return text
+    }
+
+    /// Grade → colour weight. Breakers desaturate to grey whatever grade
+    /// they held; C-grade zones are grey from the start.
+    private static func rankedOBStyle(
+        for zone: RankedOrderBlocks.Zone
+    ) -> (base: Color, fillOpacity: Double, borderOpacity: Double) {
+        guard !zone.isBreaker else {
+            return (Theme.Color.textMuted, 0.08, 0.55)
+        }
+        let directional = zone.isBullish ? Theme.Color.success : Theme.Color.danger
+        switch zone.grade {
+        case .a:        return (directional, 0.22, 0.95)
+        case .b:        return (directional, 0.12, 0.65)
+        case .c:        return (Theme.Color.textMuted, 0.10, 0.50)
+        case .unranked: return (IndicatorKind.rankedOrderBlock.color, 0.12, 0.65)
+        }
+    }
+
     // MARK: - Change of Character marks
 
     /// CHoCH overlays: always a broken-structure line + "CHoCH↑/↓" capsule;
@@ -1692,6 +2619,84 @@ struct ChartViewiPad: View {
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
                 .background(Capsule().fill(accentColor))
+        }
+    }
+
+    // MARK: - Higher-timeframe CHoCH marks
+
+    @ChartContentBuilder
+    private var htfChochMarks: some ChartContent {
+        let xEnd = Double(max(0, candles.count - 1))
+        ForEach(htfChochZones) { zone in
+            htfChochMark(for: zone, xEnd: xEnd)
+        }
+    }
+
+    @ChartContentBuilder
+    private func htfChochMark(for zone: ChangeOfCharacter.DatedZone, xEnd: Double) -> some ChartContent {
+        let baseColor: Color = zone.isBullish ? Theme.Color.success : Theme.Color.danger
+        let accentColor = IndicatorKind.changeOfCharacter.color
+        let fvgColor = Color(red: 0.30, green: 0.80, blue: 0.75)
+        // HTF zones are context, not the live signal — halve every fill so
+        // they sit visibly behind the current-timeframe CHoCH zones.
+        let dim = (zone.status == .fresh ? 1.0 : 0.6) * 0.5
+        let obX = barIndex(forDate: zone.obDate)
+        let chochX = barIndex(forDate: zone.chochDate)
+
+        // Order block layer.
+        if indicatorConfig.chochShowOB, let obX {
+            chochZoneRect(
+                id: "\(zone.id)-HTFOB", xStart: obX, xEnd: xEnd,
+                low: zone.obLow, high: zone.obHigh, color: baseColor,
+                fill: 0.12 * dim, dashed: true, tag: "OB·HTF"
+            )
+        }
+        // Displacement FVG layer.
+        if indicatorConfig.chochShowFVG,
+           let fl = zone.fvgLow, let fh = zone.fvgHigh,
+           let fd = zone.fvgDate, let fx = barIndex(forDate: fd) {
+            chochZoneRect(
+                id: "\(zone.id)-HTFFVG", xStart: fx, xEnd: xEnd,
+                low: fl, high: fh, color: fvgColor, fill: 0.16 * dim, dashed: true, tag: "FVG·HTF"
+            )
+        }
+        // Inverse FVG layer.
+        if indicatorConfig.chochShowIFVG,
+           let il = zone.ifvgLow, let ih = zone.ifvgHigh,
+           let idt = zone.ifvgDate, let ix = barIndex(forDate: idt) {
+            chochZoneRect(
+                id: "\(zone.id)-HTFIFVG", xStart: ix, xEnd: xEnd,
+                low: il, high: ih, color: accentColor, fill: 0.10 * dim, dashed: true, tag: "iFVG·HTF"
+            )
+        }
+
+        // Broken-structure level — dashed rule from the OB across to the break.
+        if let obX, let chochX {
+            RuleMark(
+                xStart: .value("HTF CHoCH lvl start", obX),
+                xEnd:   .value("HTF CHoCH lvl end",   chochX),
+                y:      .value("HTF CHoCH lvl",       zone.brokenLevel)
+            )
+            .foregroundStyle(accentColor.opacity(0.5))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+        }
+
+        // Break marker + label at the CHoCH bar.
+        if let chochX {
+            let tagText = zone.isBullish ? "CHoCH↑ HTF" : "CHoCH↓ HTF"
+            PointMark(
+                x: .value("HTF CHoCH label x", chochX),
+                y: .value("HTF CHoCH label y", zone.brokenLevel)
+            )
+            .symbolSize(0)
+            .annotation(position: zone.isBullish ? .top : .bottom, alignment: .center, spacing: 2) {
+                Text(tagText)
+                    .font(.system(size: 7, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(accentColor.opacity(0.85)))
+            }
         }
     }
 
@@ -2028,8 +3033,142 @@ struct ChartViewiPad: View {
                     )
                     .foregroundStyle(stroke.opacity(0.15))
                 }
+            case .longPosition, .shortPosition:
+                if let end = d.end,
+                   let xs = barIndex(forDate: d.start.date),
+                   let xe = barIndex(forDate: end.date) {
+                    positionMarks(for: d, xs: xs, xe: xe)
+                }
             }
         }
+        selectionHandleMarks
+    }
+
+    // MARK: - Position tool
+
+    /// Long/short position box: green reward zone entry→target, red
+    /// risk zone entry→stop, dashed entry line, and a label with lot
+    /// size and P/L. Drawn outward from entry so each side keeps its
+    /// colour even if a level is dragged through the entry.
+    @ChartContentBuilder
+    private func positionMarks(for d: ChartDrawing, xs: Double, xe: Double) -> some ChartContent {
+        let x0 = min(xs, xe), x1 = max(xs, xe)
+        let entry = d.start.price
+
+        if let target = d.targetPrice {
+            RectangleMark(
+                xStart: .value("X0", x0), xEnd: .value("X1", x1),
+                yStart: .value("Y0", entry), yEnd: .value("Y1", target)
+            )
+            .foregroundStyle(DrawingPalette.profit.opacity(DrawingPalette.zoneAlpha))
+            RuleMark(xStart: .value("T0", x0), xEnd: .value("T1", x1),
+                     y: .value("Target", target))
+                .foregroundStyle(DrawingPalette.profit)
+                .lineStyle(StrokeStyle(lineWidth: 1))
+        }
+
+        if let stop = d.stopPrice {
+            RectangleMark(
+                xStart: .value("X0", x0), xEnd: .value("X1", x1),
+                yStart: .value("Y0", entry), yEnd: .value("Y1", stop)
+            )
+            .foregroundStyle(DrawingPalette.loss.opacity(DrawingPalette.zoneAlpha))
+            RuleMark(xStart: .value("S0", x0), xEnd: .value("S1", x1),
+                     y: .value("Stop", stop))
+                .foregroundStyle(DrawingPalette.loss)
+                .lineStyle(StrokeStyle(lineWidth: 1))
+        }
+
+        RuleMark(xStart: .value("E0", x0), xEnd: .value("E1", x1),
+                 y: .value("Entry", entry))
+            .foregroundStyle(DrawingPalette.entryLine)
+            .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [5, 3]))
+            .annotation(position: .topLeading, spacing: 2) {
+                positionLabel(for: d)
+            }
+    }
+
+    @ViewBuilder
+    private func positionLabel(for d: ChartDrawing) -> some View {
+        let metrics = d.positionMetrics(spec: contractSpec)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(d.kind.isLong ? "LONG" : "SHORT")
+                    .font(.system(size: 13, weight: .heavy))
+                    .foregroundStyle(d.kind.isLong ? DrawingPalette.profit : DrawingPalette.loss)
+                if let m = metrics {
+                    Text(String(format: "%.3f lots", m.lots))
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Theme.Color.textPrimary)
+                }
+            }
+            if let m = metrics {
+                HStack(spacing: 5) {
+                    Text("−" + Self.moneyShort(m.riskAmount))
+                        .foregroundStyle(DrawingPalette.loss)
+                    if let reward = m.reward {
+                        Text("+" + Self.moneyShort(reward))
+                            .foregroundStyle(DrawingPalette.profit)
+                    }
+                    if let rr = m.rr {
+                        Text(String(format: "%.2fR", rr))
+                            .foregroundStyle(Theme.Color.textMuted)
+                    }
+                }
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                if m.belowMinLot {
+                    Text("below min lot")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.Color.warn)
+                }
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Theme.Color.surfaceMax.opacity(0.85))
+        )
+    }
+
+    static func moneyShort(_ v: Double) -> String {
+        let a = Swift.abs(v)
+        if a >= 1_000_000 { return String(format: "$%.2fM", v / 1_000_000) }
+        if a >= 1_000     { return String(format: "$%.1fk", v / 1_000) }
+        return String(format: "$%.0f", v)
+    }
+
+    /// Grab handles for the selected drawing. Sized larger than the Mac
+    /// build — these are finger targets, not cursor targets.
+    @ChartContentBuilder
+    private var selectionHandleMarks: some ChartContent {
+        if let sel = selectionTargetDrawing {
+            ForEach(handlePositions(for: sel), id: \.self) { hp in
+                PointMark(x: .value("Handle X", hp.x), y: .value("Handle Y", hp.y))
+                    .symbol(.square)
+                    .symbolSize(110)
+                    .foregroundStyle(Color.white)
+            }
+        }
+    }
+
+    private var selectionTargetDrawing: ChartDrawing? {
+        if let id = editingDrawingID,
+           let d = drawings.first(where: { $0.id == id }) {
+            if let cursor = editingCursor, let anchor = editingHandle {
+                return d.resized(anchor: anchor, to: cursor)
+            }
+            return d
+        }
+        if let id = selectedDrawingID {
+            return drawings.first(where: { $0.id == id && $0.visible })
+        }
+        return nil
+    }
+
+    struct HandlePoint: Hashable {
+        let x: Double
+        let y: Double
     }
 
     @ChartContentBuilder
@@ -2079,6 +3218,31 @@ struct ChartViewiPad: View {
                     )
                     .foregroundStyle(DrawingPalette.fill.opacity(0.25))
                 }
+            case .longPosition, .shortPosition:
+                // Mirror what the commit will build: drag height is the
+                // stop distance, target sits 2R the other side.
+                if let e = drawingEnd,
+                   let xs = barIndex(forDate: s.date),
+                   let xe = barIndex(forDate: e.date) {
+                    let long = activeTool == .longPosition
+                    let dist = Swift.abs(e.price - s.price)
+                    let stop   = long ? s.price - dist : s.price + dist
+                    let target = long ? s.price + dist * 2 : s.price - dist * 2
+                    RectangleMark(
+                        xStart: .value("Pos preview x0", min(xs, xe)),
+                        xEnd:   .value("Pos preview x1", max(xs, xe)),
+                        yStart: .value("Pos preview y0", s.price),
+                        yEnd:   .value("Pos preview y1", target)
+                    )
+                    .foregroundStyle(DrawingPalette.profit.opacity(0.14))
+                    RectangleMark(
+                        xStart: .value("Pos preview x2", min(xs, xe)),
+                        xEnd:   .value("Pos preview x3", max(xs, xe)),
+                        yStart: .value("Pos preview y2", s.price),
+                        yEnd:   .value("Pos preview y3", stop)
+                    )
+                    .foregroundStyle(DrawingPalette.loss.opacity(0.14))
+                }
             }
         }
     }
@@ -2086,11 +3250,11 @@ struct ChartViewiPad: View {
     // MARK: - Indicator marks
 
     @ChartContentBuilder
-    private func indicatorMarks(visible: Set<Int>) -> some ChartContent {
+    private func indicatorMarks(visLo: Int, visHi: Int) -> some ChartContent {
         let instances = indicators.map { Self.makeIndicatorInstance(kind: $0, config: indicatorConfig) }
         let computed = derived.indicators(instances: instances, candles: candles)
         ForEach(computed, id: \.instance.id) { entry in
-            ForEach(entry.points.filter { visible.contains($0.index) }) { p in
+            ForEach(entry.points.filter { $0.index >= visLo && $0.index <= visHi }) { p in
                 LineMark(
                     x: .value("Bar", Double(p.index)),
                     y: .value("Indicator", p.value),
@@ -2103,6 +3267,77 @@ struct ChartViewiPad: View {
                 ))
                 .interpolationMethod(.monotone)
             }
+        }
+    }
+
+    // MARK: - Volume-Filtered Order Blocks
+
+    @ChartContentBuilder
+    private var volumeFilteredOBMarks: some ChartContent {
+        let lastIndex = candles.count - 1
+        ForEach(volumeFilteredOBZones) { zone in
+            volumeFilteredOBMark(zone, lastIndex: lastIndex)
+        }
+    }
+
+    @ChartContentBuilder
+    private func volumeFilteredOBMark(_ zone: VolumeFilteredOrderBlocks.Zone, lastIndex: Int) -> some ChartContent {
+        let base: Color = zone.isBullish ? Theme.Color.success : Theme.Color.danger
+        let fillOp = zone.breaker ? 0.08 : 0.20
+        let borderOp = zone.breaker ? 0.35 : 0.75
+        let xStart = Double(zone.startIndex)
+        let xEnd   = Double(min(zone.endIndex, lastIndex))
+
+        RectangleMark(
+            xStart: .value("VFOB x0", xStart), xEnd: .value("VFOB x1", xEnd),
+            yStart: .value("VFOB y0", zone.bottom), yEnd: .value("VFOB y1", zone.top)
+        )
+        .foregroundStyle(base.opacity(fillOp))
+
+        RuleMark(xStart: .value("VFOB t0", xStart), xEnd: .value("VFOB t1", xEnd), y: .value("VFOB top", zone.top))
+            .foregroundStyle(base.opacity(borderOp))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: zone.breaker ? [3, 3] : []))
+        RuleMark(xStart: .value("VFOB b0", xStart), xEnd: .value("VFOB b1", xEnd), y: .value("VFOB bot", zone.bottom))
+            .foregroundStyle(base.opacity(borderOp))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: zone.breaker ? [3, 3] : []))
+
+        if indicatorConfig.vfobVolumetricInfo, zone.volume > 0 {
+            let mid = (zone.top + zone.bottom) / 2
+            let span = max(1.0, xEnd - xStart)
+            let barMax = min(span * 0.5, 8.0)
+            let upW = barMax * (zone.highVolume / zone.volume)
+            let dnW = barMax * (zone.lowVolume / zone.volume)
+            RectangleMark(
+                xStart: .value("VFOB uv0", xStart), xEnd: .value("VFOB uv1", xStart + upW),
+                yStart: .value("VFOB uvy0", mid), yEnd: .value("VFOB uvy1", zone.top)
+            )
+            .foregroundStyle(Theme.Color.success.opacity(0.55))
+            RectangleMark(
+                xStart: .value("VFOB dv0", xStart), xEnd: .value("VFOB dv1", xStart + dnW),
+                yStart: .value("VFOB dvy0", zone.bottom), yEnd: .value("VFOB dvy1", mid)
+            )
+            .foregroundStyle(Theme.Color.danger.opacity(0.55))
+
+            PointMark(x: .value("VFOB lbl x", xEnd), y: .value("VFOB lbl y", zone.top))
+                .symbolSize(0)
+                .annotation(position: .overlay, alignment: .topTrailing, spacing: 0) {
+                    Text("\(Self.volumeShort(zone.volume)) (\(zone.balancePct)%)")
+                        .font(.system(size: 8, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(base.opacity(0.9)))
+                }
+        }
+    }
+
+    private static func volumeShort(_ v: Double) -> String {
+        let a = abs(v)
+        switch a {
+        case 1_000_000_000...: return String(format: "%.1fB", v / 1_000_000_000)
+        case 1_000_000...:     return String(format: "%.1fM", v / 1_000_000)
+        case 1_000...:         return String(format: "%.1fK", v / 1_000)
+        default:               return String(format: "%.0f", v)
         }
     }
 
@@ -2147,7 +3382,7 @@ struct ChartViewiPad: View {
     // MARK: - UT Bot marks
 
     @ChartContentBuilder
-    private func utBotMarks(indices: [Int], visible: Set<Int>) -> some ChartContent {
+    private func utBotMarks(indices: [Int], visLo: Int, visHi: Int) -> some ChartContent {
         if let out = utBotOutput {
             if indicatorConfig.utShowTrailingStop {
                 ForEach(indices, id: \.self) { i in
@@ -2164,7 +3399,7 @@ struct ChartViewiPad: View {
                 }
             }
             let cs = displayCandles
-            ForEach(out.signals.filter { visible.contains($0.index) }) { sig in
+            ForEach(out.signals.filter { $0.index >= visLo && $0.index <= visHi }) { sig in
                 let c = cs[sig.index]
                 PointMark(
                     x: .value("Bar", Double(sig.index)),
@@ -2392,131 +3627,52 @@ struct ChartViewiPad: View {
             }
         }
 
-        // Overlay Y extremes — computed inline to avoid 11+ temporary
-        // heap-array allocations per pan/zoom frame. The overlay data
-        // (S/R levels, FVG zones, order blocks, drawings, trades, etc.)
-        // doesn't change during a gesture — only the visible xDomain
-        // does — so this scan is O(overlay points) per frame, typically
-        // a few hundred comparisons, which is cheaper than the old
-        // approach of .map-ing each source into a temporary array,
-        // concatenating them, and passing to a cached resolve that
-        // would short-circuit anyway.
-
-        for level in srLevels.support {
-            if level < lo { lo = level }
-            if level > hi { hi = level }
-        }
-        for level in srLevels.resistance {
-            if level < lo { lo = level }
-            if level > hi { hi = level }
-        }
-        for zone in fvgZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in supplyDemandZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in indicatorFvgZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in orderBlockZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in steroidOrderBlockZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in sonarlabOBZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in chochZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for run in sessionRuns {
-            if run.low < lo { lo = run.low }
-            if run.high > hi { hi = run.high }
-        }
-        for r in nySetupResults {
-            if r.orLow < lo { lo = r.orLow }
-            if r.orHigh > hi { hi = r.orHigh }
-        }
-        for result in sp2lResults {
-            let values = [
-                result.brokenLevel,
-                result.spikeLow,
-                result.spikeHigh,
-                result.entry,
-                result.stopLoss
-            ] + result.takeProfits(count: indicatorConfig.sp2lTargetCount)
-            for value in values {
-                if value < lo { lo = value }
-                if value > hi { hi = value }
-            }
-        }
-        for result in microMapResults {
-            if result.spikeLow < lo { lo = result.spikeLow }
-            if result.spikeHigh > hi { hi = result.spikeHigh }
-            for attempt in result.attempts {
-                for value in [attempt.entry, attempt.stopLoss, attempt.takeProfit].compactMap({ $0 }) {
-                    if value < lo { lo = value }
-                    if value > hi { hi = value }
-                }
-            }
-        }
-        for session in volumeProfileSessions {
-            for bucket in session.buckets {
-                if bucket.priceLevel < lo { lo = bucket.priceLevel }
-                if bucket.priceLevel > hi { hi = bucket.priceLevel }
-            }
-        }
-        if let vp = zigzagTrendVP {
-            for bucket in vp.buckets {
-                if bucket.priceLevel < lo { lo = bucket.priceLevel }
-                if bucket.priceLevel > hi { hi = bucket.priceLevel }
-            }
-        }
-        for pivot in zigzagPivots {
-            if pivot.price < lo { lo = pivot.price }
-            if pivot.price > hi { hi = pivot.price }
-        }
-        if let scenario = taScenario {
-            for v in [scenario.takeProfit, scenario.stopLoss] + [scenario.entry].compactMap({ $0 }) {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
-        if let alt = taAltScenario {
-            for v in [alt.takeProfit, alt.stopLoss] + [alt.entry].compactMap({ $0 }) {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
-        for d in drawings where d.visible {
-            if d.start.price < lo { lo = d.start.price }
-            if d.start.price > hi { hi = d.start.price }
-            if let e = d.end {
-                if e.price < lo { lo = e.price }
-                if e.price > hi { hi = e.price }
-            }
-        }
-        for t in trades {
-            for v in [t.entry, t.takeProfit, t.stopLoss, t.fillPrice ?? t.entry] {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
-        for je in journalEntries {
-            for v in [je.entry, je.takeProfit, je.stopLoss].compactMap({ $0 }) {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
+        // Overlay Y extremes — cached via ChartDerivedCache. The
+        // overlay data (S/R levels, FVG zones, order blocks, drawings,
+        // trades, etc.) rarely changes during pan/zoom, so the
+        // signature check yields a synchronous cache hit on every
+        // gesture frame. Only the candle-window scan above is uncached
+        // (it depends on the visible xDomain).
+        let instances = indicators.map { Self.makeIndicatorInstance(kind: $0, config: indicatorConfig) }
+        let overlayData = ChartDerivedCache.OverlayData(
+            candles: candles,
+            indicatorInstances: instances,
+            indicatorConfig: indicatorConfig,
+            indicators: indicators,
+            srLevels: srLevels,
+            fvgZones: fvgZones,
+            supplyDemandZones: supplyDemandZones,
+            indicatorFvgZones: indicatorFvgZones,
+            orderBlockZones: orderBlockZones,
+            steroidOrderBlockZones: steroidOrderBlockZones,
+            sonarlabOBZones: sonarlabOBZones,
+            // Ichimoku is not wired into the iPad chart yet (Mac-only
+            // for now) — empty values keep the yDomain scan correct.
+            ichimokuOutput: .empty,
+            ichimokuOBZones: [],
+            rankedOBZones: rankedOBZones,
+            volumeFilteredOBZones: volumeFilteredOBZones,
+            chochZones: chochZones,
+            htfChochZones: htfChochZones,
+            sessionRuns: sessionRuns,
+            nySetupResults: nySetupResults,
+            sp2lResults: sp2lResults,
+            pinBarComboResults: pinBarComboResults,
+            microMapResults: microMapResults,
+            mtrResults: mtrResults,
+            volumeProfileSessions: volumeProfileSessions,
+            zigzagTrendVP: zigzagTrendVP,
+            visibleRangeVP: visibleRangeVP,
+            zigzagPivots: zigzagPivots,
+            taScenario: taScenario,
+            taAltScenario: taAltScenario,
+            drawings: drawings,
+            trades: trades,
+            journalEntries: journalEntries
+        )
+        let overlayExtremes = derived.overlayExtremes(overlayData)
+        if overlayExtremes.lo < lo { lo = overlayExtremes.lo }
+        if overlayExtremes.hi > hi { hi = overlayExtremes.hi }
 
         guard visibleCandles.isEmpty == false else { return 0...1 }
         let span = hi - lo
@@ -2548,6 +3704,19 @@ struct ChartViewiPad: View {
     private func barIndex(forDate date: Date) -> Double? {
         guard !candles.isEmpty else { return nil }
         let ts = date.timeIntervalSince1970
+        // Mirror of `drawingPoint`: dates outside the series resolve to a
+        // fractional index off the end rather than snapping to the edge
+        // bar, so drawings placed ahead of price stay put.
+        if let step = barIntervalSeconds {
+            let lastTS = candles[candles.count - 1].bucketStart.timeIntervalSince1970
+            if ts > lastTS {
+                return Double(candles.count - 1) + (ts - lastTS) / step
+            }
+            let firstTS = candles[0].bucketStart.timeIntervalSince1970
+            if ts < firstTS {
+                return (ts - firstTS) / step
+            }
+        }
         var lo = 0
         var hi = candles.count - 1
         while lo < hi {
@@ -2596,22 +3765,205 @@ struct ChartViewiPad: View {
         return nil
     }
 
+    /// Mutates a copy so non-geometry fields (colour, line width, a
+    /// position's risk settings) survive the move — rebuilding from
+    /// scratch used to reset them.
     private func translated(_ d: ChartDrawing) -> ChartDrawing {
-        ChartDrawing(
-            id: d.id,
-            kind: d.kind,
-            start: DrawingPoint(
-                date: d.start.date.addingTimeInterval(movingDeltaTime),
-                price: d.start.price + movingDeltaPrice
-            ),
-            end: d.end.map { e in
-                DrawingPoint(
-                    date: e.date.addingTimeInterval(movingDeltaTime),
-                    price: e.price + movingDeltaPrice
-                )
-            },
-            visible: d.visible
+        var copy = d
+        copy.start = DrawingPoint(
+            date: d.start.date.addingTimeInterval(movingDeltaTime),
+            price: d.start.price + movingDeltaPrice
         )
+        copy.end = d.end.map { e in
+            DrawingPoint(
+                date: e.date.addingTimeInterval(movingDeltaTime),
+                price: e.price + movingDeltaPrice
+            )
+        }
+        // Stop/target are absolute prices, so they must travel with the
+        // entry or a drag would reshape the trade instead of moving it.
+        if d.kind.isPosition {
+            copy.stopPrice   = d.stopPrice.map   { $0 + movingDeltaPrice }
+            copy.targetPrice = d.targetPrice.map { $0 + movingDeltaPrice }
+        }
+        return copy
+    }
+
+    // MARK: - Drawing hit-testing (touch)
+
+    /// Handle grab points for a drawing, paired positionally with
+    /// `handleAnchors(for:)`.
+    private func handlePositions(for d: ChartDrawing) -> [HandlePoint] {
+        switch d.kind {
+        case .horizontalLine:
+            return [HandlePoint(x: effectiveXDomain.upperBound - 0.5, y: d.start.price)]
+        case .trendLine:
+            guard let end = d.end,
+                  let xs = barIndex(forDate: d.start.date),
+                  let xe = barIndex(forDate: end.date) else { return [] }
+            return [HandlePoint(x: xs, y: d.start.price), HandlePoint(x: xe, y: end.price)]
+        case .rectangle, .volumeProfile:
+            guard let end = d.end,
+                  let xs = barIndex(forDate: d.start.date),
+                  let xe = barIndex(forDate: end.date) else { return [] }
+            return [
+                HandlePoint(x: xs, y: d.start.price),
+                HandlePoint(x: xe, y: d.start.price),
+                HandlePoint(x: xs, y: end.price),
+                HandlePoint(x: xe, y: end.price)
+            ]
+        case .longPosition, .shortPosition:
+            guard let end = d.end,
+                  let xs = barIndex(forDate: d.start.date),
+                  let xe = barIndex(forDate: end.date) else { return [] }
+            var pts = [HandlePoint(x: xs, y: d.start.price)]
+            if let stop = d.stopPrice     { pts.append(HandlePoint(x: xs, y: stop)) }
+            if let target = d.targetPrice { pts.append(HandlePoint(x: xs, y: target)) }
+            pts.append(HandlePoint(x: xe, y: d.start.price))
+            return pts
+        }
+    }
+
+    /// Must stay positionally in step with `handlePositions(for:)` —
+    /// the two are zipped, so conditional handles need conditional
+    /// anchors or a missing stop maps the target handle onto `.stop`.
+    private func handleAnchors(for d: ChartDrawing) -> [ChartDrawing.Handle] {
+        switch d.kind {
+        case .horizontalLine: return [.start]
+        case .trendLine:      return [.start, .end]
+        case .rectangle, .volumeProfile:
+            return [.topLeft, .topRight, .bottomLeft, .bottomRight]
+        case .longPosition, .shortPosition:
+            var anchors: [ChartDrawing.Handle] = [.entry]
+            if d.stopPrice != nil   { anchors.append(.stop) }
+            if d.targetPrice != nil { anchors.append(.target) }
+            anchors.append(.timeEnd)
+            return anchors
+        }
+    }
+
+    /// Touch targets are bigger than cursor targets — 22pt vs the Mac
+    /// build's 10pt, roughly a fingertip.
+    private func hitTestHandle(
+        of d: ChartDrawing,
+        at location: CGPoint,
+        plotOrigin: CGPoint,
+        proxy: ChartProxy,
+        threshold: CGFloat = 22
+    ) -> ChartDrawing.Handle? {
+        let p = CGPoint(x: location.x - plotOrigin.x, y: location.y - plotOrigin.y)
+        for (hp, anchor) in zip(handlePositions(for: d), handleAnchors(for: d)) {
+            guard let hx: CGFloat = proxy.position(forX: hp.x),
+                  let hy: CGFloat = proxy.position(forY: hp.y) else { continue }
+            if hypot(p.x - hx, p.y - hy) <= threshold { return anchor }
+        }
+        return nil
+    }
+
+    private func hitTestDrawing(
+        at location: CGPoint,
+        plotOrigin: CGPoint,
+        proxy: ChartProxy,
+        threshold: CGFloat = 16
+    ) -> ChartDrawing? {
+        let p = CGPoint(x: location.x - plotOrigin.x, y: location.y - plotOrigin.y)
+        var best: (ChartDrawing, CGFloat)?
+        for d in drawings where d.visible {
+            guard let dist = drawingDistance(d, at: p, proxy: proxy) else { continue }
+            if dist <= threshold, best == nil || dist < best!.1 { best = (d, dist) }
+        }
+        return best?.0
+    }
+
+    private func drawingDistance(
+        _ d: ChartDrawing,
+        at p: CGPoint,
+        proxy: ChartProxy
+    ) -> CGFloat? {
+        switch d.kind {
+        case .horizontalLine:
+            guard let lineY = proxy.position(forY: d.start.price) else { return nil }
+            return Swift.abs(p.y - lineY)
+        case .trendLine:
+            guard let end = d.end,
+                  let xs = barIndex(forDate: d.start.date),
+                  let xe = barIndex(forDate: end.date),
+                  let xsS: CGFloat = proxy.position(forX: xs),
+                  let xeS: CGFloat = proxy.position(forX: xe),
+                  let ysS = proxy.position(forY: d.start.price),
+                  let yeS = proxy.position(forY: end.price) else { return nil }
+            return Self.distanceToSegment(p, CGPoint(x: xsS, y: ysS), CGPoint(x: xeS, y: yeS))
+        case .rectangle, .volumeProfile:
+            guard let end = d.end,
+                  let xs = barIndex(forDate: d.start.date),
+                  let xe = barIndex(forDate: end.date),
+                  let xsS: CGFloat = proxy.position(forX: xs),
+                  let xeS: CGFloat = proxy.position(forX: xe),
+                  let ysS = proxy.position(forY: d.start.price),
+                  let yeS = proxy.position(forY: end.price) else { return nil }
+            return Self.distanceToRect(p, xsS, xeS, ysS, yeS)
+        case .longPosition, .shortPosition:
+            // Whole box is grabbable: stop edge to target edge.
+            guard let end = d.end,
+                  let xs = barIndex(forDate: d.start.date),
+                  let xe = barIndex(forDate: end.date),
+                  let xsS: CGFloat = proxy.position(forX: xs),
+                  let xeS: CGFloat = proxy.position(forX: xe) else { return nil }
+            let levels = [d.start.price, d.stopPrice, d.targetPrice].compactMap { $0 }
+            guard let lo = levels.min(), let hi = levels.max(),
+                  let loS = proxy.position(forY: lo),
+                  let hiS = proxy.position(forY: hi) else { return nil }
+            return Self.distanceToRect(p, xsS, xeS, loS, hiS)
+        }
+    }
+
+    private static func distanceToRect(
+        _ p: CGPoint, _ x0: CGFloat, _ x1: CGFloat, _ y0: CGFloat, _ y1: CGFloat
+    ) -> CGFloat {
+        let rect = CGRect(
+            x: min(x0, x1), y: min(y0, y1),
+            width: Swift.abs(x1 - x0), height: Swift.abs(y1 - y0)
+        )
+        if rect.contains(p) { return 0 }
+        let dx = max(rect.minX - p.x, 0, p.x - rect.maxX)
+        let dy = max(rect.minY - p.y, 0, p.y - rect.maxY)
+        return hypot(dx, dy)
+    }
+
+    private static func distanceToSegment(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len2 = dx * dx + dy * dy
+        if len2 == 0 { return hypot(p.x - a.x, p.y - a.y) }
+        let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+
+    /// Commit an in-flight handle drag.
+    private func handleResizeEnd() {
+        defer {
+            editingDrawingID = nil
+            editingHandle = nil
+            editingCursor = nil
+        }
+        guard let id = editingDrawingID,
+              let original = drawings.first(where: { $0.id == id }),
+              let anchor = editingHandle,
+              let cursor = editingCursor else { return }
+        let resized = original.resized(anchor: anchor, to: cursor)
+        if resized == original { return }
+        onMoveDrawing?(resized)
+    }
+
+    /// Commit an in-flight body drag.
+    private func handleMoveEnd() {
+        defer {
+            movingDrawingOriginal = nil
+            movingDeltaTime = 0
+            movingDeltaPrice = 0
+        }
+        guard let original = movingDrawingOriginal else { return }
+        if movingDeltaTime == 0 && movingDeltaPrice == 0 { return }
+        onMoveDrawing?(translated(original))
     }
 
     // MARK: - Formatting
@@ -2641,4 +3993,62 @@ struct ChartViewiPad: View {
         f.dateFormat = "MMM d · HH:mm"
         return f
     }()
+}
+
+// MARK: - Equatable (re-render isolation)
+
+/// Mirrors the macOS `ChartView` perf treatment. The iPad chart is just as
+/// expensive (Apple Charts re-lays out its whole mark tree on every body
+/// evaluation) and is re-evaluated far more often than its *drawn* inputs
+/// change: every `YahooScheduler` `objectWillChange` (~1 Hz live ticks,
+/// plus every unrelated `@Published` field) invalidates the owning
+/// `ChartPlotiPad` and cascades a full re-eval — the Charts layout pass —
+/// down into here even when nothing moved. That constant relayout was the
+/// dominant driver of the "High" energy impact on device.
+///
+/// Conforming to `Equatable` + wrapping the call site in `.equatable()`
+/// lets SwiftUI skip re-invoking `body` when no render-affecting input
+/// changed. Closures (`onCommitDrawing`, …) and internal `@State` (hover,
+/// in-flight drawing, crosshair) are deliberately excluded: closures don't
+/// affect what's drawn, and self-`@State` changes bypass this gate anyway
+/// (crosshair + live drawing previews still redraw normally). The candle
+/// series compares via `Candle.seriesEqual` (O(1)) so the hot pan/zoom
+/// path — which changes `xDomain` and legitimately forces a redraw — stays
+/// cheap on years of history.
+extension ChartViewiPad: Equatable {
+    static func == (l: ChartViewiPad, r: ChartViewiPad) -> Bool {
+        Candle.seriesEqual(l.candles, r.candles)
+            && l.chartType == r.chartType
+            && l.accent == r.accent
+            && l.xDomain == r.xDomain
+            && l.yDomain == r.yDomain
+            && l.indicators == r.indicators
+            && l.indicatorConfig == r.indicatorConfig
+            && l.htfChochZones == r.htfChochZones
+            && l.srLevels == r.srLevels
+            && l.fvgZones == r.fvgZones
+            && l.supplyDemandZones == r.supplyDemandZones
+            && l.taScenario == r.taScenario
+            && l.taAltScenario == r.taAltScenario
+            && l.drawings == r.drawings
+            && l.activeTool == r.activeTool
+            && l.selectedDrawingID == r.selectedDrawingID
+            && l.trades == r.trades
+            && l.journalEntries == r.journalEntries
+            && l.livePrice == r.livePrice
+            && l.replayActive == r.replayActive
+            && Self.newsEqual(l.newsEvents, r.newsEvents)
+            && l.newsTimeZone == r.newsTimeZone
+    }
+
+    /// Same cheap news-list compare as the Mac chart: ids in order +
+    /// `actual` values, so live actuals refresh the popover without a
+    /// full event compare on every tick.
+    private static func newsEqual(_ a: [ForexFactoryEvent], _ b: [ForexFactoryEvent]) -> Bool {
+        guard a.count == b.count else { return false }
+        for i in a.indices where a[i].id != b[i].id || a[i].actual != b[i].actual {
+            return false
+        }
+        return true
+    }
 }

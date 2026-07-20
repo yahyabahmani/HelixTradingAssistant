@@ -35,6 +35,9 @@ struct HelixTradingAppiPad: App {
                 .preferredColorScheme(.dark)
                 .task {
                     ProxyTransport.shared.configure(ProxyConfig.load())
+                    // Warm the economic calendar so the chart's news
+                    // flags have data before the News tab is opened.
+                    news.refresh()
                     paperBalance.attach(tradeStore: tradeStore)
                     autoTrader.attach(
                         configStore: autoTraderConfig,

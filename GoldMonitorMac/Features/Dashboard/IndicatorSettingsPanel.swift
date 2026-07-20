@@ -169,16 +169,19 @@ struct IndicatorSettingsPanel: View {
                 onUpdate(copy)
             }
         )
-        return VStack(alignment: .leading, spacing: 4) {
+        return HStack {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.Color.textSecondary)
+            Spacer()
             Picker("", selection: binding) {
                 ForEach(options, id: \.value) { opt in
                     Text(opt.label).tag(opt.value)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
         }
     }
 }
@@ -342,16 +345,19 @@ struct OscillatorSettingsPanel: View {
                 onUpdate(copy)
             }
         )
-        return VStack(alignment: .leading, spacing: 4) {
+        return HStack {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.Color.textSecondary)
+            Spacer()
             Picker("", selection: binding) {
                 ForEach(options, id: \.value) { opt in
                     Text(opt.label).tag(opt.value)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
         }
     }
 }

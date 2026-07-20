@@ -104,6 +104,11 @@ struct ChartView: View {
     /// stay active so the user keeps spatial reference while drawing.
     var activeTool: DrawingTool = .none
 
+    /// Contract spec for the pair on screen, used to size the position
+    /// tool. The chart is otherwise pair-agnostic, so the dashboard
+    /// passes this down rather than the chart looking up a pair id.
+    var contractSpec: ContractSpec = .forPair(id: "ounce")
+
     /// Called with the fully-formed `ChartDrawing` when the user
     /// finishes a draw gesture (mouse-up). DashboardView appends to
     /// its `DrawingStore`. Optional so existing call-sites that don't
@@ -170,7 +175,26 @@ struct ChartView: View {
     /// candle's date and sets the cursor.
     var onPickReplayAnchor: ((Int) -> Void)? = nil
 
+    /// ForexFactory economic-calendar events to plot as impact-coloured
+    /// flags on the bottom time axis (TradingView-style). Already
+    /// currency/impact-filtered upstream by `NewsStore.chartEvents`; the
+    /// chart maps each event's `eventAt` to a bar via `barIndex(forDate:)`
+    /// and only draws those inside the visible window. Empty ⇒ the news
+    /// layer is off (toggled from the Layers popover).
+    var newsEvents: [ForexFactoryEvent] = []
+
+    /// Display zone for the news popup's timestamp —
+    /// `NewsStore.effectiveTimeZone`. Threaded so the flag detail card
+    /// shows the same time the News tab does.
+    var newsTimeZone: TimeZone = .current
+
     @State private var hovered: HoverState?
+
+    /// The news event whose flag the user clicked, if any — drives the
+    /// floating detail popover. Anchor is the flag's point in the chart
+    /// overlay's coordinate space so the card can pin above it.
+    @State private var selectedNews: ForexFactoryEvent?
+    @State private var newsPopupAnchor: CGPoint = .zero
     /// Memoizes the data-derived arrays (HA candles, indicators, UT Bot,
     /// Order Blocks, …) so pan/zoom — which only changes `xDomain` —
     /// doesn't recompute them over the full history every frame, and
@@ -377,6 +401,16 @@ struct ChartView: View {
     }
     private static let maxSonarlabOBs = 20
 
+    /// Ranked Order Block zones — swing-structure OBs graded A/B/C by
+    /// Volume Profile + Ichimoku confluence.
+    private var rankedOBZones: [RankedOrderBlocks.Zone] {
+        guard indicators.contains(.rankedOrderBlock) else { return [] }
+        return derived.rankedOrderBlocks(
+            candles: candles,
+            config: indicatorConfig.rankedOrderBlockConfiguration
+        )
+    }
+
     /// Change of Character confluence zones — structure break + OB/FVG.
     private var chochZones: [ChangeOfCharacter.Zone] {
         guard indicators.contains(.changeOfCharacter) else { return [] }
@@ -389,10 +423,70 @@ struct ChartView: View {
         )
     }
 
-    /// Session-based Volume Profile sessions — per-day histograms with POC, VAH, VAL.
-    /// Only used when ZigZag mode is disabled.
+    /// Ichimoku Cloud output — five lines + the Kumo, computed when the
+    /// indicator is toggled on. Displacement is baked into the plot
+    /// indices (see `Ichimoku.compute`).
+    private var ichimokuOutput: Ichimoku.Output {
+        guard indicators.contains(.ichimoku) else { return .empty }
+        return derived.ichimoku(
+            candles: candles,
+            tenkan: indicatorConfig.ichiTenkan,
+            kijun: indicatorConfig.ichiKijun,
+            senkouB: indicatorConfig.ichiSenkouB,
+            displacement: indicatorConfig.ichiDisplacement
+        )
+    }
+
+    /// Ichimoku-confluence Order Block zones — base OBs filtered/scored
+    /// by their alignment with the Ichimoku picture. Capped to the most
+    /// recent few like the other order-block overlays.
+    private var ichimokuOBZones: [IchimokuOrderBlocks.Zone] {
+        guard indicators.contains(.ichimokuOrderBlock) else { return [] }
+        let all = derived.ichimokuOrderBlocks(
+            candles: candles,
+            periods: indicatorConfig.iobPeriods,
+            threshold: indicatorConfig.iobThreshold,
+            useWicks: indicatorConfig.iobUseWicks,
+            tenkan: indicatorConfig.iobTenkan,
+            kijun: indicatorConfig.iobKijun,
+            senkouB: indicatorConfig.iobSenkouB,
+            displacement: indicatorConfig.iobDisplacement,
+            minScore: indicatorConfig.iobMinScore,
+            requireTrend: indicatorConfig.iobRequireTrend
+        )
+        return Array(all.suffix(Self.maxOrderBlocks))
+    }
+
+    /// Volume-Filtered Order Blocks — swing-anchored, volume-tagged zones
+    /// with a breaker lifecycle. Empty when the indicator is off.
+    private var volumeFilteredOBZones: [VolumeFilteredOrderBlocks.Zone] {
+        guard indicators.contains(.volumeFilteredOrderBlock) else { return [] }
+        let cfg = indicatorConfig
+        return derived.volumeFilteredOrderBlocks(
+            candles: candles,
+            swingLength: cfg.vfobSwingLength,
+            invalidationWick: cfg.vfobInvalidation == "Wick",
+            maxZonesPerSide: Self.vfobZoneCount(cfg.vfobZoneCount),
+            showHistoric: cfg.vfobShowHistoric,
+            combine: true
+        ).zones
+    }
+
+    /// Zone-count preset → zones rendered per side (matches the Pine
+    /// "One / Low / Medium / High" mapping).
+    static func vfobZoneCount(_ preset: String) -> Int {
+        switch preset {
+        case "One":    return 1
+        case "Medium": return 5
+        case "High":   return 10
+        default:       return 3   // "Low"
+        }
+    }
+
+    /// Session-based Volume Profile sessions — per-trading-day histograms
+    /// with POC, VAH, VAL. Only used in "session" mode.
     private var volumeProfileSessions: [VolumeProfile.SessionVP] {
-        guard indicators.contains(.volumeProfile), !indicatorConfig.vpUseZigzag else { return [] }
+        guard indicators.contains(.volumeProfile), indicatorConfig.vpMode == "session" else { return [] }
         return derived.volumeProfile(
             candles: candles,
             bucketCount: indicatorConfig.vpBucketCount,
@@ -401,9 +495,9 @@ struct ChartView: View {
     }
 
     /// ZigZag-based Volume Profile for the last trend segment only.
-    /// Used when ZigZag mode is enabled.
+    /// Used in "zigzag" mode.
     private var zigzagTrendVP: VolumeProfile.TrendVP? {
-        guard indicators.contains(.volumeProfile), indicatorConfig.vpUseZigzag else { return nil }
+        guard indicators.contains(.volumeProfile), indicatorConfig.vpMode == "zigzag" else { return nil }
         return derived.zigzagVolumeProfile(
             candles: candles,
             bucketCount: indicatorConfig.vpBucketCount,
@@ -413,10 +507,27 @@ struct ChartView: View {
         )
     }
 
+    /// Visible-range Volume Profile: histogram of the bars currently in
+    /// view plus ranked high-volume levels. Used in "visible" mode.
+    private var visibleRangeVP: VolumeProfile.VisibleRangeVP? {
+        guard indicators.contains(.volumeProfile), indicatorConfig.vpMode == "visible" else { return nil }
+        let domain = effectiveXDomain
+        let lo = max(0, Int(domain.lowerBound.rounded(.down)))
+        let hi = min(candles.count - 1, Int(domain.upperBound.rounded(.up)))
+        guard hi > lo else { return nil }
+        return derived.visibleRangeVolumeProfile(
+            candles: candles,
+            barRange: lo...hi,
+            bucketCount: indicatorConfig.vpBucketCount,
+            valueAreaPct: indicatorConfig.vpValueAreaPct,
+            levelCount: indicatorConfig.vpLevelCount
+        )
+    }
+
     /// ZigZag pivot points for drawing the zigzag line overlay.
     private var zigzagPivots: [ZigZag.Pivot] {
         guard indicators.contains(.volumeProfile),
-              indicatorConfig.vpUseZigzag,
+              indicatorConfig.vpMode == "zigzag",
               indicatorConfig.vpShowZigzag else { return [] }
         return derived.zigzagPivots(
             candles: candles,
@@ -703,6 +814,9 @@ struct ChartView: View {
             orderBlockMarks
             steroidOrderBlockMarks
             sonarlabOBMarks
+            ichimokuOBMarks
+            rankedOBMarks
+            volumeFilteredOBMarks
             htfChochMarks
             chochMarks
             scenarioMarks
@@ -723,6 +837,11 @@ struct ChartView: View {
             // Indicator overlays — drawn on top of the price series so
             // SMA/EMA/Bollinger lines aren't obscured by candle bodies.
             indicatorMarks(visible: indexSet)
+
+            // Ichimoku Cloud — translucent Kumo + five component lines.
+            // On top so the lines read clearly; the cloud fill is faint
+            // enough not to hide candles.
+            ichimokuMarks(visible: indexSet)
 
             // UT Bot trailing-stop line + buy/sell labels. Rendered last
             // so the labels sit on top of every other mark.
@@ -801,47 +920,116 @@ struct ChartView: View {
             // need the plot frame size to translate point-distance into
             // time-distance, which lives on the chart proxy.
             GeometryReader { geo in
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case .active(let location):
-                            // Translate to the chart's plot frame coords,
-                            // ask the proxy for the X-axis value (a bar
-                            // index as Double), round to the nearest
-                            // whole bar, and clamp into the array.
-                            let origin = geo[proxy.plotAreaFrame].origin
-                            let x = location.x - origin.x
-                            let y = location.y - origin.y
-                            guard let xValue: Double = proxy.value(atX: x) else { return }
-                            let idx = max(0, min(candles.count - 1, Int(xValue.rounded())))
-                            // Project the cursor's Y back into price
-                            // space. nil ⇒ cursor is outside the plot
-                            // area's Y range; fall back to the candle
-                            // close so the crosshair always has a
-                            // sensible reading.
-                            let yPrice: Double = proxy.value(atY: y) ?? candles[idx].close
-                            hovered = HoverState(
-                                candle: candles[idx],
-                                index: idx,
-                                cursor: location,
-                                cursorPrice: yPrice
-                            )
-                        case .ended:
-                            hovered = nil
+                let plotFrame = geo[proxy.plotAreaFrame]
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                // Translate to the chart's plot frame coords,
+                                // ask the proxy for the X-axis value (a bar
+                                // index as Double), round to the nearest
+                                // whole bar, and clamp into the array.
+                                let origin = plotFrame.origin
+                                let x = location.x - origin.x
+                                let y = location.y - origin.y
+                                guard let xValue: Double = proxy.value(atX: x) else { return }
+                                let idx = max(0, min(candles.count - 1, Int(xValue.rounded())))
+                                // Project the cursor's Y back into price
+                                // space. nil ⇒ cursor is outside the plot
+                                // area's Y range; fall back to the candle
+                                // close so the crosshair always has a
+                                // sensible reading.
+                                let yPrice: Double = proxy.value(atY: y) ?? candles[idx].close
+                                hovered = HoverState(
+                                    candle: candles[idx],
+                                    index: idx,
+                                    cursor: location,
+                                    cursorPrice: yPrice
+                                )
+                            case .ended:
+                                hovered = nil
+                            }
                         }
+                        .gesture(dragGesture(
+                            plotWidth: plotFrame.size.width,
+                            plotHeight: plotFrame.size.height,
+                            plotOrigin: plotFrame.origin,
+                            proxy: proxy
+                        ))
+                        .simultaneousGesture(magnificationGesture())
+
+                    // News flags pinned to the bottom time axis. Drawn as
+                    // overlay views (not ChartContent) so they share the
+                    // proxy's coordinate space with the click hit-test and
+                    // the popover, and never fight the plot clip. Taps are
+                    // handled by the gesture rectangle above, so the flags
+                    // themselves take no hits.
+                    newsFlagsLayer(proxy: proxy, plotFrame: plotFrame)
+                        .allowsHitTesting(false)
+
+                    // Detail popover for the clicked flag.
+                    if let ev = selectedNews {
+                        newsPopupLayer(event: ev, plotFrame: plotFrame)
                     }
-                    .gesture(dragGesture(
-                        plotWidth: geo[proxy.plotAreaFrame].size.width,
-                        plotHeight: geo[proxy.plotAreaFrame].size.height,
-                        plotOrigin: geo[proxy.plotAreaFrame].origin,
-                        proxy: proxy
-                    ))
-                    .simultaneousGesture(magnificationGesture())
+                }
             }
         }
         }
+    }
+
+    // MARK: - News layer (flags + popover)
+
+    @ViewBuilder
+    private func newsFlagsLayer(proxy: ChartProxy, plotFrame: CGRect) -> some View {
+        ForEach(visibleNewsMarkers) { m in
+            if let px = proxy.position(forX: m.barIndex) {
+                NewsFlagView(color: m.color)
+                    .position(x: plotFrame.origin.x + px, y: plotFrame.maxY - 9)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func newsPopupLayer(event: ForexFactoryEvent, plotFrame: CGRect) -> some View {
+        let cardWidth: CGFloat = 240
+        let halfW = cardWidth / 2 + 6
+        let clampedX = min(max(newsPopupAnchor.x, plotFrame.minX + halfW),
+                           plotFrame.maxX - halfW)
+        // Sit the card above the flag; clamp so it never rides off the
+        // top of the plot on a very short chart.
+        let clampedY = max(plotFrame.minY + 70, newsPopupAnchor.y - 84)
+        NewsMarkerPopover(event: event, timeZone: newsTimeZone) {
+            selectedNews = nil
+        }
+        .position(x: clampedX, y: clampedY)
+    }
+
+    /// Was a plain click on a bottom-axis news flag? Returns the event
+    /// and the flag's anchor point (in overlay coordinates) so the
+    /// popover can pin above it. Only the bottom ~26px band is live so
+    /// clicks on price action never trip a flag.
+    private func newsHitTest(
+        at location: CGPoint,
+        plotOrigin: CGPoint,
+        plotHeight: CGFloat,
+        proxy: ChartProxy
+    ) -> (event: ForexFactoryEvent, anchor: CGPoint)? {
+        guard location.y >= plotOrigin.y + plotHeight - 26 else { return nil }
+        var best: (dist: CGFloat, event: ForexFactoryEvent, anchor: CGPoint)?
+        for m in visibleNewsMarkers {
+            guard let px = proxy.position(forX: m.barIndex) else { continue }
+            let sx = plotOrigin.x + px
+            let d = abs(location.x - sx)
+            guard d <= 14 else { continue }
+            if best == nil || d < best!.dist {
+                best = (d, m.event, CGPoint(x: sx, y: plotOrigin.y + plotHeight - 9))
+            }
+        }
+        guard let b = best else { return nil }
+        return (b.event, b.anchor)
     }
 
     // MARK: - Pan / draw
@@ -939,6 +1127,28 @@ struct ChartView: View {
                     return
                 }
 
+                // News flag click — a plain click on a bottom-axis flag
+                // opens its detail popover and takes priority over
+                // pan/deselect. Only in cursor mode; drawing tools own
+                // their clicks. A click that misses every flag dismisses
+                // an open popover.
+                if activeTool == .none, !hadMovement {
+                    if let hit = newsHitTest(
+                        at: value.location,
+                        plotOrigin: plotOrigin,
+                        plotHeight: plotHeight,
+                        proxy: proxy
+                    ) {
+                        selectedNews = hit.event
+                        newsPopupAnchor = hit.anchor
+                        dragStartDomain = nil
+                        dragStartYDomain = nil
+                        panLockedY = false
+                        return
+                    }
+                    if selectedNews != nil { selectedNews = nil }
+                }
+
                 if activeTool != .none {
                     handleDrawEnd(value, plotOrigin: plotOrigin, proxy: proxy)
                     return
@@ -1004,6 +1214,17 @@ struct ChartView: View {
         case .trendLine:      return [.start, .end]
         case .rectangle:      return [.topLeft, .topRight, .bottomLeft, .bottomRight]
         case .volumeProfile:  return [.topLeft, .topRight, .bottomLeft, .bottomRight]
+        // Must stay positionally in step with `handlePositions(for:)`,
+        // which omits handles for levels the position doesn't have —
+        // `hitTestHandle` zips the two lists, so an unconditional list
+        // here would map the target handle onto `.stop` when a position
+        // has no stop.
+        case .longPosition, .shortPosition:
+            var anchors: [ChartDrawing.Handle] = [.entry]
+            if d.stopPrice != nil   { anchors.append(.stop) }
+            if d.targetPrice != nil { anchors.append(.target) }
+            anchors.append(.timeEnd)
+            return anchors
         }
     }
 
@@ -1115,7 +1336,57 @@ struct ChartView: View {
         case .volumeProfile:
             guard hasDrag else { return }
             onCommitDrawing?(ChartDrawing(kind: .volumeProfile, start: start, end: end))
+        case .longPosition, .shortPosition:
+            // Entry is where the drag began; its vertical extent sets
+            // the stop distance so the box lands roughly where the user
+            // gestured. A plain click (no drag) still commits, using a
+            // default stop of 0.5% of price — otherwise a zero-height
+            // position would divide by zero in the metrics.
+            let dragged = abs(end.price - start.price)
+            let stopDistance = dragged > 0 ? dragged : abs(start.price) * 0.005
+            guard stopDistance > 0 else { return }
+            // Give the box a visible width even on a click, and always
+            // extend rightward regardless of drag direction.
+            let rightDate = end.date > start.date
+                ? end.date
+                : defaultPositionRightEdge(from: start.date)
+            onCommitDrawing?(ChartDrawing.position(
+                long: activeTool == .longPosition,
+                entry: start,
+                end: DrawingPoint(date: rightDate, price: start.price),
+                stopDistance: stopDistance,
+                balance: defaultPositionBalance,
+                riskPercent: defaultPositionRisk
+            ))
         }
+    }
+
+    /// Account balance / risk % a freshly-drawn position starts with.
+    /// Seeded from the Risk Calculator's stored settings so the two
+    /// features agree out of the box; each position keeps its own copy
+    /// afterwards and the inspector edits that.
+    ///
+    /// Read straight from `UserDefaults` rather than `@AppStorage`
+    /// because these are only consulted inside a gesture handler —
+    /// making them observable would invalidate an equatable view on
+    /// every unrelated settings write.
+    private var defaultPositionBalance: Double {
+        let stored = UserDefaults.standard.double(forKey: "riskcalc.accountBalance")
+        return stored > 0 ? stored : 10_000
+    }
+
+    private var defaultPositionRisk: Double {
+        let stored = UserDefaults.standard.double(forKey: "riskcalc.riskPercent")
+        return stored > 0 ? stored : 1.0
+    }
+
+    /// Right edge for a position committed without a horizontal drag —
+    /// a fixed number of bars forward so the box is grabbable. Clamps to
+    /// the last candle so the anchor always resolves to a real bar.
+    private func defaultPositionRightEdge(from start: Date) -> Date {
+        guard let startIdx = barIndex(forDate: start), !candles.isEmpty else { return start }
+        let idx = min(candles.count - 1, Int(startIdx) + 20)
+        return candles[idx].bucketStart
     }
 
     /// Drag-to-move: update the in-flight (time, price) delta. Both
@@ -1154,22 +1425,30 @@ struct ChartView: View {
 
     /// Apply the in-flight delta to a drawing. Used by both the live
     /// preview render and the final commit.
+    /// Mutates a copy rather than rebuilding from scratch, so every
+    /// field that isn't geometry (colour, line width, a position's risk
+    /// settings) survives the move. Rebuilding used to silently reset
+    /// the drawing's colour on every drag.
     private func translated(_ d: ChartDrawing) -> ChartDrawing {
-        ChartDrawing(
-            id: d.id,
-            kind: d.kind,
-            start: DrawingPoint(
-                date: d.start.date.addingTimeInterval(movingDeltaTime),
-                price: d.start.price + movingDeltaPrice
-            ),
-            end: d.end.map { e in
-                DrawingPoint(
-                    date: e.date.addingTimeInterval(movingDeltaTime),
-                    price: e.price + movingDeltaPrice
-                )
-            },
-            visible: d.visible
+        var copy = d
+        copy.start = DrawingPoint(
+            date: d.start.date.addingTimeInterval(movingDeltaTime),
+            price: d.start.price + movingDeltaPrice
         )
+        copy.end = d.end.map { e in
+            DrawingPoint(
+                date: e.date.addingTimeInterval(movingDeltaTime),
+                price: e.price + movingDeltaPrice
+            )
+        }
+        // A position's stop/target are absolute prices, not offsets, so
+        // they have to travel with the entry or a drag would reshape
+        // the trade instead of relocating it.
+        if d.kind.isPosition {
+            copy.stopPrice   = d.stopPrice.map   { $0 + movingDeltaPrice }
+            copy.targetPrice = d.targetPrice.map { $0 + movingDeltaPrice }
+        }
+        return copy
     }
 
     /// Pick the topmost visible drawing within `threshold` screen
@@ -1258,6 +1537,29 @@ struct ChartView: View {
             let dx = max(rect.minX - p.x, 0, p.x - rect.maxX)
             let dy = max(rect.minY - p.y, 0, p.y - rect.maxY)
             return hypot(dx, dy)
+        case .longPosition, .shortPosition:
+            // Grab area spans the full box: stop edge to target edge
+            // vertically, entry bar to right edge horizontally. Falls
+            // back to the entry line alone if neither level is set.
+            guard let end = d.end,
+                  let xs = barIndex(forDate: d.start.date),
+                  let xe = barIndex(forDate: end.date),
+                  let xsScreen: CGFloat = proxy.position(forX: xs),
+                  let xeScreen: CGFloat = proxy.position(forX: xe)
+            else { return nil }
+            let levels = [d.start.price, d.stopPrice, d.targetPrice].compactMap { $0 }
+            guard let lo = levels.min(), let hi = levels.max(),
+                  let loScreen = proxy.position(forY: lo),
+                  let hiScreen = proxy.position(forY: hi)
+            else { return nil }
+            let rect = CGRect(
+                x: min(xsScreen, xeScreen), y: min(loScreen, hiScreen),
+                width: abs(xeScreen - xsScreen), height: abs(hiScreen - loScreen)
+            )
+            if rect.contains(p) { return 0 }
+            let dx = max(rect.minX - p.x, 0, p.x - rect.maxX)
+            let dy = max(rect.minY - p.y, 0, p.y - rect.maxY)
+            return hypot(dx, dy)
         }
     }
 
@@ -1290,7 +1592,28 @@ struct ChartView: View {
         guard let barX: Double = proxy.value(atX: xInPlot),
               let priceY: Double = proxy.value(atY: yInPlot)
         else { return nil }
-        let idx = max(0, min(candles.count - 1, Int(barX.rounded())))
+        // Past either end of the series, project the date off the bar
+        // spacing instead of clamping. Clamping pinned anything dragged
+        // into the empty right margin onto the newest candle, so a
+        // drawing could never be placed ahead of price — the usual spot
+        // for a planned position.
+        let lastIdx = candles.count - 1
+        if let step = barIntervalSeconds {
+            if barX > Double(lastIdx) {
+                let ahead = barX - Double(lastIdx)
+                return DrawingPoint(
+                    date: candles[lastIdx].bucketStart.addingTimeInterval(ahead * step),
+                    price: priceY
+                )
+            }
+            if barX < 0 {
+                return DrawingPoint(
+                    date: candles[0].bucketStart.addingTimeInterval(barX * step),
+                    price: priceY
+                )
+            }
+        }
+        let idx = max(0, min(lastIdx, Int(barX.rounded())))
         return DrawingPoint(date: candles[idx].bucketStart, price: priceY)
     }
 
@@ -1300,9 +1623,45 @@ struct ChartView: View {
     /// to 4h (it lands on whichever 4h bucket contains the same moment).
     /// Uses binary search — O(log n) instead of the prior O(n) linear scan.
     /// Returns nil for empty series.
+    /// Seconds between consecutive bars, used to project dates past
+    /// either end of the series.
+    ///
+    /// Takes the *median* of the recent spacings rather than the last
+    /// one: a weekend or session gap sits at the end of the series
+    /// often enough that the final diff is regularly 40× the true bar
+    /// width, which would fling anything placed in the right margin far
+    /// into the future.
+    private var barIntervalSeconds: TimeInterval? {
+        let n = candles.count
+        guard n >= 2 else { return nil }
+        var diffs: [TimeInterval] = []
+        diffs.reserveCapacity(min(n - 1, 20))
+        for i in max(1, n - 20)..<n {
+            let d = candles[i].bucketStart.timeIntervalSince(candles[i - 1].bucketStart)
+            if d > 0 { diffs.append(d) }
+        }
+        guard !diffs.isEmpty else { return nil }
+        diffs.sort()
+        return diffs[diffs.count / 2]
+    }
+
     private func barIndex(forDate date: Date) -> Double? {
         guard !candles.isEmpty else { return nil }
         let ts = date.timeIntervalSince1970
+        // Mirror of `drawingPoint`: a date outside the series maps to a
+        // fractional index off the end rather than snapping to the edge
+        // bar, so a drawing anchored ahead of price stays where it was
+        // put instead of collapsing onto the last candle.
+        if let step = barIntervalSeconds {
+            let lastTS = candles[candles.count - 1].bucketStart.timeIntervalSince1970
+            if ts > lastTS {
+                return Double(candles.count - 1) + (ts - lastTS) / step
+            }
+            let firstTS = candles[0].bucketStart.timeIntervalSince1970
+            if ts < firstTS {
+                return (ts - firstTS) / step
+            }
+        }
         var lo = 0
         var hi = candles.count - 1
         while lo < hi {
@@ -1364,6 +1723,34 @@ struct ChartView: View {
     /// replay keep working unchanged.
     private var renderIndices: [Int] {
         ChartWindow.renderIndices(domain: effectiveXDomain, count: candles.count)
+    }
+
+    /// News events resolved to bar indices and clipped to the visible
+    /// window. Only events whose `eventAt` falls inside the loaded
+    /// candle range get a bar; those outside the current pan/zoom
+    /// domain are dropped so we don't draw off-screen flags. Recomputed
+    /// per frame but cheap (binary search per event, and the list is
+    /// already impact/currency-filtered).
+    private var visibleNewsMarkers: [NewsChartMarker] {
+        guard !newsEvents.isEmpty, candles.count > 1 else { return [] }
+        let firstTs = candles.first!.bucketStart.timeIntervalSince1970
+        // Extend the tail by one bar so an event on the latest bar still
+        // qualifies (bucketStart is the bar's opening time).
+        let barSpan = candles.count > 1
+            ? candles[candles.count - 1].bucketStart.timeIntervalSince(candles[candles.count - 2].bucketStart)
+            : 60
+        let lastTs = candles.last!.bucketStart.timeIntervalSince1970 + max(barSpan, 1)
+        let domain = effectiveXDomain
+        var markers: [NewsChartMarker] = []
+        for ev in newsEvents {
+            guard let at = ev.eventAt else { continue }
+            let ts = at.timeIntervalSince1970
+            guard ts >= firstTs, ts <= lastTs else { continue }
+            guard let bx = barIndex(forDate: at) else { continue }
+            guard bx >= domain.lowerBound - 1, bx <= domain.upperBound + 1 else { continue }
+            markers.append(NewsChartMarker(id: ev.id, barIndex: bx, event: ev))
+        }
+        return markers
     }
 
     // MARK: - Mark variants
@@ -2730,6 +3117,125 @@ struct ChartView: View {
     }
 
 
+
+    // MARK: - Ranked order block marks
+
+    /// Ranked Order Blocks. Unlike the other OB layers these carry a
+    /// grade: A zones are drawn boldly, B at half strength, C in
+    /// neutral grey. A breaker (price traded through it) stops at the
+    /// break bar and switches to a dashed grey outline.
+    @ChartContentBuilder
+    private var rankedOBMarks: some ChartContent {
+        let lastIndex = candles.count - 1
+        ForEach(rankedOBZones) { zone in
+            rankedOBMark(for: zone, lastIndex: lastIndex)
+        }
+    }
+
+    @ChartContentBuilder
+    private func rankedOBMark(for zone: RankedOrderBlocks.Zone, lastIndex: Int) -> some ChartContent {
+        let style = Self.rankedOBStyle(for: zone)
+        let xStart = Double(zone.startIndex)
+        let xEnd   = Double(min(zone.endIndex, lastIndex))
+        let edge = StrokeStyle(
+            lineWidth: zone.isCombined ? 2 : 1,
+            dash: zone.isBreaker ? [4, 3] : []
+        )
+
+        RectangleMark(
+            xStart: .value("ROB start", xStart),
+            xEnd:   .value("ROB end",   xEnd),
+            yStart: .value("ROB low",   zone.bottom),
+            yEnd:   .value("ROB high",  zone.top)
+        )
+        .foregroundStyle(style.base.opacity(style.fillOpacity))
+
+        RuleMark(
+            xStart: .value("ROB start hi", xStart),
+            xEnd:   .value("ROB end hi",   xEnd),
+            y:      .value("ROB hi",       zone.top)
+        )
+        .foregroundStyle(style.base.opacity(style.borderOpacity))
+        .lineStyle(edge)
+
+        RuleMark(
+            xStart: .value("ROB start lo", xStart),
+            xEnd:   .value("ROB end lo",   xEnd),
+            y:      .value("ROB lo",       zone.bottom)
+        )
+        .foregroundStyle(style.base.opacity(style.borderOpacity))
+        .lineStyle(edge)
+
+        // Badge sits centred inside the zone, like the Pine original's
+        // box text. Anchoring it at the right edge (as the other OB
+        // layers do) puts it flush against the price axis, where the
+        // plot area clips it away entirely.
+        if indicatorConfig.robShowLabels {
+            PointMark(
+                x: .value("ROB label x", Self.rankedOBLabelX(
+                    xStart: xStart, xEnd: xEnd, domain: effectiveXDomain
+                )),
+                y: .value("ROB label y", (zone.top + zone.bottom) / 2)
+            )
+            .symbolSize(0)
+            .annotation(position: .overlay, alignment: .center, spacing: 0) {
+                // `.fixedSize()` is load-bearing: an overlay annotation on
+                // a zero-size PointMark is proposed zero width, which
+                // truncates the badge down to an unreadable sliver.
+                Text(Self.rankedOBBadge(for: zone))
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(style.base.opacity(0.85)))
+            }
+        }
+    }
+
+    /// Where along the zone to park its badge. Zones run from the order
+    /// block to the right edge of the chart, so a plain midpoint lands
+    /// off-screen on an old zone once the user pans. Clamp it into the
+    /// part of the zone that is actually visible, inset from the plot
+    /// edges so the capsule isn't clipped.
+    private static func rankedOBLabelX(
+        xStart: Double,
+        xEnd: Double,
+        domain: ClosedRange<Double>
+    ) -> Double {
+        let inset = (domain.upperBound - domain.lowerBound) * 0.05
+        let lo = max(xStart, domain.lowerBound + inset)
+        let hi = min(xEnd, domain.upperBound - inset)
+        return lo <= hi ? (lo + hi) / 2 : (xStart + xEnd) / 2
+    }
+
+    /// Badge text: grade + score, with the zone's lifecycle state
+    /// appended so a merged or broken zone reads at a glance.
+    private static func rankedOBBadge(for zone: RankedOrderBlocks.Zone) -> String {
+        var text = zone.badge
+        if zone.isCombined { text += " ·M" }
+        if zone.isBreaker  { text += " ·BRK" }
+        return text
+    }
+
+    /// Grade → colour weight. Breakers desaturate to grey whatever grade
+    /// they held; C-grade zones are grey from the start.
+    private static func rankedOBStyle(
+        for zone: RankedOrderBlocks.Zone
+    ) -> (base: Color, fillOpacity: Double, borderOpacity: Double) {
+        guard !zone.isBreaker else {
+            return (Theme.Color.textMuted, 0.08, 0.55)
+        }
+        let directional = zone.isBullish ? Theme.Color.success : Theme.Color.danger
+        switch zone.grade {
+        case .a:        return (directional, 0.22, 0.95)
+        case .b:        return (directional, 0.12, 0.65)
+        case .c:        return (Theme.Color.textMuted, 0.10, 0.50)
+        case .unranked: return (IndicatorKind.rankedOrderBlock.color, 0.12, 0.65)
+        }
+    }
+
     /// Change of Character overlays. For every CHoCH we always draw the
     /// broken-structure line + a "CHoCH↑/↓" capsule at the break bar; the
     /// order block, the displacement FVG and the inverse FVG each draw as
@@ -2913,110 +3419,246 @@ struct ChartView: View {
         }
     }
 
-    /// Volume Profile — either zigzag-based (last trend, right side) or
-    /// session-based (per-day histograms), depending on `vpUseZigzag`.
+    /// Volume Profile — three modes, switched by `indicatorConfig.vpMode`:
+    /// "session" (per-trading-day histograms), "zigzag" (last trend
+    /// segment, right margin) and "visible" (visible window + ranked
+    /// high-volume levels).
     @ChartContentBuilder
     private var volumeProfileMarks: some ChartContent {
-        if indicatorConfig.vpUseZigzag {
-            zigzagVPMarks
-        } else {
-            sessionVPMarks
+        switch indicatorConfig.vpMode {
+        case "session": sessionVPMarks
+        case "visible": visibleRangeVPMarks
+        default:        zigzagVPMarks
+        }
+    }
+
+    /// Right margin geometry shared by the margin-anchored modes
+    /// (zigzag + visible): the histogram hugs the visible right edge so
+    /// it stays on screen while panning, sized relative to the visible
+    /// span instead of a fixed bar count.
+    private var vpMargin: (rightEdge: Double, width: Double) {
+        let domain = effectiveXDomain
+        let width = max(6, min(24, (domain.upperBound - domain.lowerBound) * 0.18))
+        return (domain.upperBound, width)
+    }
+
+    /// Two-tone histogram bars, right-anchored at `rightEdge` and
+    /// extending leftward by up to `maxWidth` bar units. Up-volume
+    /// (close ≥ open) renders success-tinted, down-volume danger-tinted;
+    /// buckets outside the value area are dimmed, the POC row is
+    /// emphasised. POC/VA membership comes from the precomputed indices
+    /// — no float comparisons against derived prices.
+    @ChartContentBuilder
+    private func vpHistogramMarks(
+        buckets: [VolumeProfile.Bucket],
+        bucketSize: Double,
+        pocIndex: Int,
+        vaLowIndex: Int,
+        vaHighIndex: Int,
+        rightEdge: Double,
+        maxWidth: Double,
+        tag: String
+    ) -> some ChartContent {
+        let maxVol = buckets.map(\.volume).max() ?? 1
+        ForEach(Array(buckets.enumerated()), id: \.offset) { idx, bucket in
+            let totalW = maxWidth * (bucket.volume / maxVol)
+            let upW = maxWidth * (bucket.upVolume / maxVol)
+            let inVA = idx >= vaLowIndex && idx <= vaHighIndex
+            let opacity: Double = idx == pocIndex ? 0.85 : (inVA ? 0.55 : 0.25)
+            // Down segment (left), up segment (right).
+            RectangleMark(
+                xStart: .value("\(tag) d0", rightEdge - totalW),
+                xEnd:   .value("\(tag) d1", rightEdge - upW),
+                yStart: .value("\(tag) dy0", bucket.priceLevel),
+                yEnd:   .value("\(tag) dy1", bucket.priceLevel + bucketSize * 0.92)
+            )
+            .foregroundStyle(Theme.Color.danger.opacity(opacity))
+            RectangleMark(
+                xStart: .value("\(tag) u0", rightEdge - upW),
+                xEnd:   .value("\(tag) u1", rightEdge),
+                yStart: .value("\(tag) uy0", bucket.priceLevel),
+                yEnd:   .value("\(tag) uy1", bucket.priceLevel + bucketSize * 0.92)
+            )
+            .foregroundStyle(Theme.Color.success.opacity(opacity))
+        }
+    }
+
+    /// Small "no volume data" note — when every candle lacked volume
+    /// the profile is time-at-price (TPO-style), not true volume; say
+    /// so once instead of silently degrading.
+    @ChartContentBuilder
+    private func vpTPONote(x: Double, y: Double) -> some ChartContent {
+        PointMark(x: .value("VP TPO x", x), y: .value("VP TPO y", y))
+            .symbolSize(0)
+            .annotation(position: .top, alignment: .trailing, spacing: 2) {
+                Text("TPO · no volume data")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Theme.Color.textMuted)
+            }
+    }
+
+    /// Visible-range VP: histogram in the right margin plus ranked
+    /// high-volume levels drawn across the profiled bar range.
+    @ChartContentBuilder
+    private var visibleRangeVPMarks: some ChartContent {
+        if let vp = visibleRangeVP {
+            let margin = vpMargin
+
+            vpHistogramMarks(
+                buckets: vp.buckets,
+                bucketSize: vp.bucketSize,
+                pocIndex: vp.pocIndex,
+                vaLowIndex: vp.vaLowIndex,
+                vaHighIndex: vp.vaHighIndex,
+                rightEdge: margin.rightEdge,
+                maxWidth: margin.width,
+                tag: "VRVP"
+            )
+
+            // Ranked volume levels — line weight and opacity scale with
+            // relative volume; the POC level is the accent one.
+            ForEach(vp.levels, id: \.price) { level in
+                RuleMark(
+                    xStart: .value("VR L x0", Double(vp.startBar)),
+                    xEnd:   .value("VR L x1", Double(vp.endBar)),
+                    y:      .value("VR L y", level.price)
+                )
+                .foregroundStyle(
+                    level.isPOC
+                        ? Color(red: 0.96, green: 0.36, blue: 0.36).opacity(0.9)
+                        : Theme.Color.info.opacity(0.25 + 0.55 * level.strength)
+                )
+                .lineStyle(StrokeStyle(
+                    lineWidth: level.isPOC ? 2 : 1 + level.strength,
+                    dash: level.isPOC ? [] : [6, 3]
+                ))
+                .annotation(position: .top, alignment: .trailing, spacing: 0) {
+                    Text(Self.priceExact(level.price))
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(
+                            level.isPOC ? Color(red: 0.96, green: 0.36, blue: 0.36) : Theme.Color.textMuted
+                        )
+                        .padding(.horizontal, 3)
+                        .background(
+                            Theme.Color.surfaceMax.opacity(0.85),
+                            in: RoundedRectangle(cornerRadius: 3)
+                        )
+                }
+            }
+
+            if !vp.hasRealVolume {
+                vpTPONote(x: margin.rightEdge, y: vp.vah)
+            }
         }
     }
 
     /// ZigZag-based VP: a single histogram for the last trend segment,
-    /// drawn on the right side of the chart past the candles so it
-    /// doesn't overlap the price action.
+    /// anchored to the visible right edge so it doesn't overlap the
+    /// price action.
     @ChartContentBuilder
     private var zigzagVPMarks: some ChartContent {
         if let vp = zigzagTrendVP {
-            let maxVol = vp.buckets.map(\.volume).max() ?? 1
+            let margin = vpMargin
             let lastBar = Double(candles.count - 1)
-            // VP sits in the margin to the right of the last candle.
-            // The histogram grows leftward from the right edge.
-            let marginStart = lastBar + 1.0
-            let marginWidth = 20.0  // visual width in bar-index units
-            let bucketSize = vp.buckets.count > 1
-                ? (vp.buckets[1].priceLevel - vp.buckets[0].priceLevel)
-                : vp.buckets[0].priceLevel * 0.001
 
-            ForEach(Array(vp.buckets.enumerated()), id: \.offset) { _, bucket in
-                let barWidth = marginWidth * (bucket.volume / maxVol)
-                let isPOC = abs(bucket.priceLevel - vp.poc) < bucketSize * 0.01
-                RectangleMark(
-                    xStart: .value("ZVP x0", marginStart + marginWidth - barWidth),
-                    xEnd:   .value("ZVP x1", marginStart + marginWidth),
-                    yStart: .value("ZVP y0", bucket.priceLevel),
-                    yEnd:   .value("ZVP y1", bucket.priceLevel + bucketSize * 0.92)
-                )
-                .foregroundStyle(
-                    isPOC
-                        ? Color(red: 0.96, green: 0.36, blue: 0.36).opacity(0.85)
-                        : Theme.Color.info.opacity(0.45)
-                )
+            vpHistogramMarks(
+                buckets: vp.buckets,
+                bucketSize: vp.bucketSize,
+                pocIndex: vp.pocIndex,
+                vaLowIndex: vp.vaLowIndex,
+                vaHighIndex: vp.vaHighIndex,
+                rightEdge: margin.rightEdge,
+                maxWidth: margin.width,
+                tag: "ZVP"
+            )
+
+            // POC — developing ray from the trend start to the visible
+            // right edge.
+            RuleMark(
+                xStart: .value("ZVP POC x0", Double(vp.startBar)),
+                xEnd:   .value("ZVP POC x1", margin.rightEdge),
+                y:      .value("ZVP POC", vp.poc)
+            )
+            .foregroundStyle(Color(red: 0.96, green: 0.36, blue: 0.36))
+            .lineStyle(StrokeStyle(lineWidth: 1.5))
+
+            // VAH / VAL — scoped to the trend segment.
+            RuleMark(
+                xStart: .value("ZVP VAH x0", Double(vp.startBar)),
+                xEnd:   .value("ZVP VAH x1", lastBar),
+                y:      .value("ZVP VAH", vp.vah)
+            )
+            .foregroundStyle(Theme.Color.info.opacity(0.7))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+
+            RuleMark(
+                xStart: .value("ZVP VAL x0", Double(vp.startBar)),
+                xEnd:   .value("ZVP VAL x1", lastBar),
+                y:      .value("ZVP VAL", vp.val)
+            )
+            .foregroundStyle(Theme.Color.info.opacity(0.7))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+
+            if !vp.hasRealVolume {
+                vpTPONote(x: margin.rightEdge, y: vp.vah)
             }
-
-            // POC line — solid, extends across the trend segment
-            RuleMark(y: .value("ZVP POC", vp.poc))
-                .foregroundStyle(Color(red: 0.96, green: 0.36, blue: 0.36))
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
-
-            // VAH line — dashed
-            RuleMark(y: .value("ZVP VAH", vp.vah))
-                .foregroundStyle(Theme.Color.info.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-
-            // VAL line — dashed
-            RuleMark(y: .value("ZVP VAL", vp.val))
-                .foregroundStyle(Theme.Color.info.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
         }
     }
 
-    /// Session-based VP: per-day histograms (the original behavior).
+    /// Session-based VP: per-trading-day histograms. POC/VAH/VAL are
+    /// scoped to their own session's bar range (only the latest session
+    /// extends a few bars as developing levels) so older sessions don't
+    /// spray full-width lines across the chart.
     @ChartContentBuilder
     private var sessionVPMarks: some ChartContent {
         let sessions = volumeProfileSessions
+        let lastBar = Double(candles.count - 1)
         ForEach(sessions) { session in
-            let maxVol = session.buckets.map(\.volume).max() ?? 1
             let sessionWidth = Double(session.endBar - session.startBar)
-            let maxBarWidth = sessionWidth * 0.25
+            let maxBarWidth = max(2, sessionWidth * 0.25)
             let rightEdge = Double(session.endBar)
-            let bucketSize = session.buckets.count > 1
-                ? (session.buckets[1].priceLevel - session.buckets[0].priceLevel)
-                : session.buckets[0].priceLevel * 0.001
+            let isLatest = session.id == sessions.last?.id
+            // Latest session's levels project a few bars forward —
+            // they're the actionable, still-developing ones.
+            let lineEnd = isLatest ? lastBar + 8 : rightEdge
 
-            // Volume histogram bars — right-anchored, left-extending.
-            ForEach(Array(session.buckets.enumerated()), id: \.offset) { _, bucket in
-                let barWidth = maxBarWidth * (bucket.volume / maxVol)
-                let isPOC = abs(bucket.priceLevel - session.poc) < bucketSize * 0.01
-                RectangleMark(
-                    xStart: .value("VP x0", rightEdge - barWidth),
-                    xEnd:   .value("VP x1", rightEdge),
-                    yStart: .value("VP y0", bucket.priceLevel),
-                    yEnd:   .value("VP y1", bucket.priceLevel + bucketSize * 0.92)
-                )
-                .foregroundStyle(
-                    isPOC
-                        ? Color(red: 0.96, green: 0.36, blue: 0.36).opacity(0.85)
-                        : Theme.Color.info.opacity(0.45)
-                )
-            }
+            vpHistogramMarks(
+                buckets: session.buckets,
+                bucketSize: session.bucketSize,
+                pocIndex: session.pocIndex,
+                vaLowIndex: session.vaLowIndex,
+                vaHighIndex: session.vaHighIndex,
+                rightEdge: rightEdge,
+                maxWidth: maxBarWidth,
+                tag: "VP\(session.id)"
+            )
 
             // POC line — solid
-            RuleMark(y: .value("VP POC", session.poc))
-                .foregroundStyle(Color(red: 0.96, green: 0.36, blue: 0.36))
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
+            RuleMark(
+                xStart: .value("VP POC x0", Double(session.startBar)),
+                xEnd:   .value("VP POC x1", lineEnd),
+                y:      .value("VP POC", session.poc)
+            )
+            .foregroundStyle(Color(red: 0.96, green: 0.36, blue: 0.36))
+            .lineStyle(StrokeStyle(lineWidth: 1.5))
 
             // VAH line — dashed
-            RuleMark(y: .value("VP VAH", session.vah))
-                .foregroundStyle(Theme.Color.info.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            RuleMark(
+                xStart: .value("VP VAH x0", Double(session.startBar)),
+                xEnd:   .value("VP VAH x1", lineEnd),
+                y:      .value("VP VAH", session.vah)
+            )
+            .foregroundStyle(Theme.Color.info.opacity(0.7))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
 
             // VAL line — dashed
-            RuleMark(y: .value("VP VAL", session.val))
-                .foregroundStyle(Theme.Color.info.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            RuleMark(
+                xStart: .value("VP VAL x0", Double(session.startBar)),
+                xEnd:   .value("VP VAL x1", lineEnd),
+                y:      .value("VP VAL", session.val)
+            )
+            .foregroundStyle(Theme.Color.info.opacity(0.7))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
 
             // Session boundary — faint vertical
             if session.startBar > 0 {
@@ -3024,6 +3666,9 @@ struct ChartView: View {
                     .foregroundStyle(Theme.Color.textMuted.opacity(0.15))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 4]))
             }
+        }
+        if let latest = sessions.last, !latest.hasRealVolume {
+            vpTPONote(x: Double(latest.endBar), y: latest.vah)
         }
     }
 
@@ -3616,6 +4261,13 @@ struct ChartView: View {
                 {
                     vpMarks(for: d, end: end, xs: xs, xe: xe, stroke: stroke, lw: lw)
                 }
+            case .longPosition, .shortPosition:
+                if let end = d.end,
+                   let xs = barIndex(forDate: d.start.date),
+                   let xe = barIndex(forDate: end.date)
+                {
+                    positionMarks(for: d, xs: xs, xe: xe)
+                }
             }
         }
 
@@ -3623,6 +4275,113 @@ struct ChartView: View {
         // committed mark. Only the selected drawing gets handles; click
         // anywhere else to deselect.
         selectionHandleMarks
+    }
+
+    // MARK: - Position tool
+
+    /// A long/short position box: a green reward zone from entry to
+    /// target, a red risk zone from entry to stop, the entry line
+    /// between them, and a label carrying lot size + P/L.
+    ///
+    /// Zones are drawn from the entry outward rather than as one box so
+    /// each side keeps its own colour even when the user drags a level
+    /// through the entry (an inverted setup still renders truthfully
+    /// instead of flipping colours).
+    @ChartContentBuilder
+    private func positionMarks(for d: ChartDrawing, xs: Double, xe: Double) -> some ChartContent {
+        let x0 = min(xs, xe), x1 = max(xs, xe)
+        let entry = d.start.price
+
+        // ── Reward zone ─────────────────────────────────────────────
+        if let target = d.targetPrice {
+            RectangleMark(
+                xStart: .value("X0", x0), xEnd: .value("X1", x1),
+                yStart: .value("Y0", entry), yEnd: .value("Y1", target)
+            )
+            .foregroundStyle(DrawingPalette.profit.opacity(DrawingPalette.zoneAlpha))
+            RuleMark(xStart: .value("T0", x0), xEnd: .value("T1", x1),
+                     y: .value("Target", target))
+                .foregroundStyle(DrawingPalette.profit)
+                .lineStyle(StrokeStyle(lineWidth: 1))
+        }
+
+        // ── Risk zone ───────────────────────────────────────────────
+        if let stop = d.stopPrice {
+            RectangleMark(
+                xStart: .value("X0", x0), xEnd: .value("X1", x1),
+                yStart: .value("Y0", entry), yEnd: .value("Y1", stop)
+            )
+            .foregroundStyle(DrawingPalette.loss.opacity(DrawingPalette.zoneAlpha))
+            RuleMark(xStart: .value("S0", x0), xEnd: .value("S1", x1),
+                     y: .value("Stop", stop))
+                .foregroundStyle(DrawingPalette.loss)
+                .lineStyle(StrokeStyle(lineWidth: 1))
+        }
+
+        // ── Entry ───────────────────────────────────────────────────
+        RuleMark(xStart: .value("E0", x0), xEnd: .value("E1", x1),
+                 y: .value("Entry", entry))
+            .foregroundStyle(DrawingPalette.entryLine)
+            .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [5, 3]))
+            .annotation(position: .topLeading, spacing: 2) {
+                positionLabel(for: d)
+            }
+    }
+
+    /// Lot size, risk, reward and R:R for a position box. Rendered as a
+    /// chart annotation so it tracks the entry line as the user drags.
+    @ViewBuilder
+    private func positionLabel(for d: ChartDrawing) -> some View {
+        let metrics = d.positionMetrics(spec: contractSpec)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Text(d.kind.isLong ? "LONG" : "SHORT")
+                    .font(.system(size: 12, weight: .heavy))
+                    .foregroundStyle(d.kind.isLong ? DrawingPalette.profit : DrawingPalette.loss)
+                if let m = metrics {
+                    Text(String(format: "%.3f lots", m.lots))
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Theme.Color.textPrimary)
+                }
+            }
+            if let m = metrics {
+                HStack(spacing: 5) {
+                    Text("−" + Self.moneyShort(m.riskAmount))
+                        .foregroundStyle(DrawingPalette.loss)
+                    if let reward = m.reward {
+                        Text("+" + Self.moneyShort(reward))
+                            .foregroundStyle(DrawingPalette.profit)
+                    }
+                    if let rr = m.rr {
+                        Text(String(format: "%.2fR", rr))
+                            .foregroundStyle(Theme.Color.textMuted)
+                    }
+                }
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                // A size no broker will accept is worth saying out loud
+                // rather than leaving the trader to notice the decimals.
+                if m.belowMinLot {
+                    Text("below min lot")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.Color.warn)
+                }
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Theme.Color.surfaceMax.opacity(0.85))
+        )
+    }
+
+    /// Compact money formatting for the position label — "$1.2k" keeps
+    /// the annotation narrow enough not to cover price action.
+    static func moneyShort(_ v: Double) -> String {
+        let a = abs(v)
+        if a >= 1_000_000 { return String(format: "$%.2fM", v / 1_000_000) }
+        if a >= 1_000     { return String(format: "$%.1fk", v / 1_000) }
+        return String(format: "$%.0f", v)
     }
 
     /// Small square handles drawn at the selected drawing's endpoints
@@ -3709,6 +4468,19 @@ struct ChartView: View {
                 HandlePoint(x: xs, y: end.price),
                 HandlePoint(x: xe, y: end.price)
             ]
+        case .longPosition, .shortPosition:
+            guard let end = d.end,
+                  let xs = barIndex(forDate: d.start.date),
+                  let xe = barIndex(forDate: end.date)
+            else { return [] }
+            // Entry / stop / target grab points sit on the left edge so
+            // they never collide with the time handle on the right.
+            // Levels the position doesn't have simply get no handle.
+            var pts = [HandlePoint(x: xs, y: d.start.price)]
+            if let stop = d.stopPrice     { pts.append(HandlePoint(x: xs, y: stop)) }
+            if let target = d.targetPrice { pts.append(HandlePoint(x: xs, y: target)) }
+            pts.append(HandlePoint(x: xe, y: d.start.price))
+            return pts
         }
     }
 
@@ -3795,6 +4567,34 @@ struct ChartView: View {
                         yEnd:   .value("VP Preview y1", max(s.price, e.price))
                     )
                     .foregroundStyle(DrawingPalette.fill.opacity(0.25))
+                }
+            case .longPosition, .shortPosition:
+                // Preview the risk/reward split the drag will produce:
+                // the drag height becomes the stop distance, and the
+                // target sits 2R the other side of entry (matching
+                // `ChartDrawing.position`).
+                if let e = drawingEnd,
+                   let xs = barIndex(forDate: s.date),
+                   let xe = barIndex(forDate: e.date)
+                {
+                    let long = activeTool == .longPosition
+                    let dist = abs(e.price - s.price)
+                    let stop   = long ? s.price - dist : s.price + dist
+                    let target = long ? s.price + dist * 2 : s.price - dist * 2
+                    RectangleMark(
+                        xStart: .value("Pos preview x0", min(xs, xe)),
+                        xEnd:   .value("Pos preview x1", max(xs, xe)),
+                        yStart: .value("Pos preview y0", s.price),
+                        yEnd:   .value("Pos preview y1", target)
+                    )
+                    .foregroundStyle(DrawingPalette.profit.opacity(0.14))
+                    RectangleMark(
+                        xStart: .value("Pos preview x2", min(xs, xe)),
+                        xEnd:   .value("Pos preview x3", max(xs, xe)),
+                        yStart: .value("Pos preview y2", s.price),
+                        yEnd:   .value("Pos preview y3", stop)
+                    )
+                    .foregroundStyle(DrawingPalette.loss.opacity(0.14))
                 }
             }
         }
@@ -3987,6 +4787,199 @@ struct ChartView: View {
     /// Slightly thinner middle Bollinger line; everything else 1.6pt.
     private func indicatorLineWidth(for band: String) -> CGFloat {
         band == "bb_mid" ? 1 : 1.6
+    }
+
+    // Ichimoku component colours — kept close to the traditional TradingView
+    // palette so the overlay reads familiarly.
+    private static let ichiTenkanColor = Color(red: 0.30, green: 0.65, blue: 1.00)
+    private static let ichiKijunColor  = Color(red: 0.95, green: 0.45, blue: 0.35)
+    private static let ichiSpanAColor  = Color(red: 0.30, green: 0.78, blue: 0.52)
+    private static let ichiSpanBColor  = Color(red: 0.88, green: 0.38, blue: 0.44)
+    private static let ichiChikouColor = Color(red: 0.72, green: 0.55, blue: 0.95)
+
+    /// Ichimoku Cloud — the shaded Kumo (two-tone `AreaMark` ribbon)
+    /// behind the five component lines. Displacement is already baked into
+    /// each point's plot index, so we just filter to the visible window
+    /// and plot. The forward-projected tail past the last candle sits
+    /// outside the x-domain and is clipped.
+    @ChartContentBuilder
+    private func ichimokuMarks(visible: Set<Int>) -> some ChartContent {
+        let out = ichimokuOutput
+        // Kumo fill first so the lines read on top of it.
+        if indicatorConfig.ichiShowCloud {
+            ForEach(out.cloud.filter { visible.contains($0.index) }) { c in
+                AreaMark(
+                    x: .value("Bar", Double(c.index)),
+                    yStart: .value("Span B", c.spanB),
+                    yEnd: .value("Span A", c.spanA)
+                )
+                .foregroundStyle(
+                    (c.isBullish ? Self.ichiSpanAColor : Self.ichiSpanBColor).opacity(0.14)
+                )
+                .interpolationMethod(.monotone)
+            }
+        }
+        ichimokuLine(out.senkouA, band: "ichiA", color: Self.ichiSpanAColor, width: 1, visible: visible)
+        ichimokuLine(out.senkouB, band: "ichiB", color: Self.ichiSpanBColor, width: 1, visible: visible)
+        ichimokuLine(out.tenkan, band: "ichiTenkan", color: Self.ichiTenkanColor, width: 1.4, visible: visible)
+        ichimokuLine(out.kijun, band: "ichiKijun", color: Self.ichiKijunColor, width: 1.6, visible: visible)
+        if indicatorConfig.ichiShowChikou {
+            ichimokuLine(out.chikou, band: "ichiChikou", color: Self.ichiChikouColor, width: 1, visible: visible)
+        }
+    }
+
+    /// One Ichimoku line series, keyed by `band` so Charts connects it as
+    /// a single line rather than disjoint segments.
+    @ChartContentBuilder
+    private func ichimokuLine(
+        _ points: [Ichimoku.LinePoint],
+        band: String,
+        color: Color,
+        width: CGFloat,
+        visible: Set<Int>
+    ) -> some ChartContent {
+        ForEach(points.filter { visible.contains($0.index) }) { p in
+            LineMark(
+                x: .value("Bar", Double(p.index)),
+                y: .value("Ichimoku", p.value),
+                series: .value("Series", band)
+            )
+            .foregroundStyle(color)
+            .lineStyle(StrokeStyle(lineWidth: width))
+            .interpolationMethod(.monotone)
+        }
+    }
+
+    /// Ichimoku-confluence Order Block zones — like the plain order-block
+    /// overlay but tagged with the confluence score and the components it
+    /// lined up with.
+    @ChartContentBuilder
+    private var ichimokuOBMarks: some ChartContent {
+        let lastIndex = candles.count - 1
+        ForEach(ichimokuOBZones) { zone in
+            ichimokuOBMark(for: zone, lastIndex: lastIndex)
+        }
+    }
+
+    @ChartContentBuilder
+    private func ichimokuOBMark(for zone: IchimokuOrderBlocks.Zone, lastIndex: Int) -> some ChartContent {
+        let baseColor: Color = zone.isBullish ? Theme.Color.success : Theme.Color.danger
+        let xStart = Double(zone.index)
+        let xEnd   = Double(lastIndex)
+        // Stronger confluence → more opaque fill.
+        let fillOpacity = min(0.30, 0.08 + Double(zone.confluenceScore) * 0.05)
+
+        RectangleMark(
+            xStart: .value("iOB start", xStart),
+            xEnd:   .value("iOB end",   xEnd),
+            yStart: .value("iOB low",   zone.low),
+            yEnd:   .value("iOB high",  zone.high)
+        )
+        .foregroundStyle(baseColor.opacity(fillOpacity))
+
+        RuleMark(
+            xStart: .value("iOB s hi", xStart), xEnd: .value("iOB e hi", xEnd),
+            y: .value("iOB hi", zone.high)
+        )
+        .foregroundStyle(baseColor.opacity(0.7))
+        .lineStyle(StrokeStyle(lineWidth: 1))
+        RuleMark(
+            xStart: .value("iOB s lo", xStart), xEnd: .value("iOB e lo", xEnd),
+            y: .value("iOB lo", zone.low)
+        )
+        .foregroundStyle(baseColor.opacity(0.7))
+        .lineStyle(StrokeStyle(lineWidth: 1))
+
+        PointMark(
+            x: .value("iOB label", xEnd),
+            y: .value("iOB hi", zone.high)
+        )
+        .symbolSize(0)
+        .annotation(position: .overlay, alignment: .trailing, spacing: 0) {
+            let tag = zone.isBullish ? "☁OB↑" : "☁OB↓"
+            let detail = zone.reasons.isEmpty ? "" : " · " + zone.reasons.joined(separator: "·")
+            Text("\(tag) \(zone.confluenceScore)\(detail)")
+                .font(.system(size: 8, weight: .heavy))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(baseColor.opacity(0.95)))
+        }
+    }
+
+    // MARK: - Volume-Filtered Order Blocks
+
+    @ChartContentBuilder
+    private var volumeFilteredOBMarks: some ChartContent {
+        let lastIndex = candles.count - 1
+        ForEach(volumeFilteredOBZones) { zone in
+            volumeFilteredOBMark(zone, lastIndex: lastIndex)
+        }
+    }
+
+    @ChartContentBuilder
+    private func volumeFilteredOBMark(_ zone: VolumeFilteredOrderBlocks.Zone, lastIndex: Int) -> some ChartContent {
+        let base: Color = zone.isBullish ? Theme.Color.success : Theme.Color.danger
+        let fillOp = zone.breaker ? 0.08 : 0.20
+        let borderOp = zone.breaker ? 0.35 : 0.75
+        let xStart = Double(zone.startIndex)
+        let xEnd   = Double(min(zone.endIndex, lastIndex))
+
+        RectangleMark(
+            xStart: .value("VFOB x0", xStart), xEnd: .value("VFOB x1", xEnd),
+            yStart: .value("VFOB y0", zone.bottom), yEnd: .value("VFOB y1", zone.top)
+        )
+        .foregroundStyle(base.opacity(fillOp))
+
+        RuleMark(xStart: .value("VFOB t0", xStart), xEnd: .value("VFOB t1", xEnd), y: .value("VFOB top", zone.top))
+            .foregroundStyle(base.opacity(borderOp))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: zone.breaker ? [3, 3] : []))
+        RuleMark(xStart: .value("VFOB b0", xStart), xEnd: .value("VFOB b1", xEnd), y: .value("VFOB bot", zone.bottom))
+            .foregroundStyle(base.opacity(borderOp))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: zone.breaker ? [3, 3] : []))
+
+        // Volumetric split — an up-volume (top half) and down-volume
+        // (bottom half) bar anchored at the block's left edge, widths ∝
+        // each share of the block's total volume.
+        if indicatorConfig.vfobVolumetricInfo, zone.volume > 0 {
+            let mid = (zone.top + zone.bottom) / 2
+            let span = max(1.0, xEnd - xStart)
+            let barMax = min(span * 0.5, 8.0)
+            let upW = barMax * (zone.highVolume / zone.volume)
+            let dnW = barMax * (zone.lowVolume / zone.volume)
+            RectangleMark(
+                xStart: .value("VFOB uv0", xStart), xEnd: .value("VFOB uv1", xStart + upW),
+                yStart: .value("VFOB uvy0", mid), yEnd: .value("VFOB uvy1", zone.top)
+            )
+            .foregroundStyle(Theme.Color.success.opacity(0.55))
+            RectangleMark(
+                xStart: .value("VFOB dv0", xStart), xEnd: .value("VFOB dv1", xStart + dnW),
+                yStart: .value("VFOB dvy0", zone.bottom), yEnd: .value("VFOB dvy1", mid)
+            )
+            .foregroundStyle(Theme.Color.danger.opacity(0.55))
+
+            PointMark(x: .value("VFOB lbl x", xEnd), y: .value("VFOB lbl y", zone.top))
+                .symbolSize(0)
+                .annotation(position: .overlay, alignment: .topTrailing, spacing: 0) {
+                    Text("\(Self.volumeShort(zone.volume)) (\(zone.balancePct)%)")
+                        .font(.system(size: 8, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(base.opacity(0.9)))
+                }
+        }
+    }
+
+    /// Compact volume formatter (1.2K / 3.4M / 5.1B) for the OB labels.
+    private static func volumeShort(_ v: Double) -> String {
+        let a = abs(v)
+        switch a {
+        case 1_000_000_000...: return String(format: "%.1fB", v / 1_000_000_000)
+        case 1_000_000...:     return String(format: "%.1fM", v / 1_000_000)
+        case 1_000...:         return String(format: "%.1fK", v / 1_000)
+        default:               return String(format: "%.0f", v)
+        }
     }
 
     private static func makeIndicatorInstance(kind: IndicatorKind, config: OscillatorConfig) -> IndicatorInstance {
@@ -4491,194 +5484,50 @@ struct ChartView: View {
         }
         if visibleCandles.isEmpty { lo = 0; hi = 1 }
 
-        // Pull in any indicator values that exceed the candle range so
-        // SMA/EMA/Bollinger lines never get clipped off-screen. Restrict
-        // to the visible index window to match the rendered marks.
-        if !indicatorInstances.isEmpty, let b = bounds {
-            for entry in derived.indicators(instances: indicatorInstances, candles: candles) {
-                for p in entry.points where p.index >= b.lo && p.index <= b.hi {
-                    if p.value < lo { lo = p.value }
-                    if p.value > hi { hi = p.value }
-                }
-            }
-        }
-        // UT Bot trailing stop can sit well outside the candle range,
-        // especially right after a flip. Only fold it into the domain
-        // when the user has the visual stop line enabled — otherwise
-        // we'd be reserving Y space for an invisible mark.
-        if indicatorConfig.utShowTrailingStop,
-           indicators.contains(.utBot),
-           let b = bounds,
-           let stops = utBotOutput?.trailingStop
-        {
-            for i in b.lo ... b.hi where i < stops.count {
-                guard let v = stops[i] else { continue }
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
-        
-        // Zero-allocation inline scans for all overlay extremes.
-        // This avoids dozen+ allocations of temporary arrays on every pan/zoom frame.
-        for level in srLevels.support {
-            if level < lo { lo = level }
-            if level > hi { hi = level }
-        }
-        for level in srLevels.resistance {
-            if level < lo { lo = level }
-            if level > hi { hi = level }
-        }
-        for zone in fvgZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in supplyDemandZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in indicatorFvgZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in orderBlockZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in steroidOrderBlockZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in sonarlabOBZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in chochZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for zone in htfChochZones {
-            if zone.low < lo { lo = zone.low }
-            if zone.high > hi { hi = zone.high }
-        }
-        for run in sessionRuns {
-            if run.low < lo { lo = run.low }
-            if run.high > hi { hi = run.high }
-        }
-        for r in nySetupResults {
-            if r.orLow < lo { lo = r.orLow }
-            if r.orHigh > hi { hi = r.orHigh }
-        }
-        for r in sp2lResults {
-            for v in [
-                r.brokenLevel,
-                r.spikeLow,
-                r.spikeHigh,
-                r.entry,
-                r.stopLoss,
-            ] + r.takeProfits(count: indicatorConfig.sp2lTargetCount) {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
-        for result in pinBarComboResults {
-            for value in [
-                result.level,
-                result.pinBarLow,
-                result.pinBarHigh,
-                result.entry,
-                result.stopLoss,
-                result.takeProfit
-            ] {
-                if value < lo { lo = value }
-                if value > hi { hi = value }
-            }
-        }
-        for result in microMapResults {
-            if result.spikeLow < lo { lo = result.spikeLow }
-            if result.spikeHigh > hi { hi = result.spikeHigh }
-            for attempt in result.attempts {
-                for value in [attempt.entry, attempt.stopLoss, attempt.takeProfit].compactMap({ $0 }) {
-                    if value < lo { lo = value }
-                    if value > hi { hi = value }
-                }
-            }
-        }
-        for result in mtrResults {
-            let channelBars = result.channelEndIndex - result.channelStartIndex
-            let channelSlope = channelBars == 0 ? 0 :
-                (result.channelEndPrice - result.channelStartPrice) / Double(channelBars)
-            let projectedMain = result.channelStartPrice
-                + channelSlope * Double(result.breakoutIndex - result.channelStartIndex)
-            let projectedParallel = projectedMain
-                + (result.parallelStartPrice - result.channelStartPrice)
-            var values = [
-                result.channelStartPrice,
-                result.channelEndPrice,
-                result.parallelStartPrice,
-                result.parallelEndPrice,
-                projectedMain,
-                projectedParallel,
-                result.trendExtremePrice,
-                result.retestPrice,
-                result.neckline
-            ]
-            values += [result.entry, result.stopLoss, result.takeProfit].compactMap { $0 }
-            for value in values {
-                if value < lo { lo = value }
-                if value > hi { hi = value }
-            }
-        }
+        // Overlay + indicator extremes — cached in ChartDerivedCache.
+        // The expensive scan (all indicator points + all overlay zone
+        // arrays) only runs when the overlay data actually changes
+        // (new AI result, trade edit, drawing add). During pan/zoom
+        // this hits the cache synchronously — no loop, no allocations.
+        let overlay = derived.overlayExtremes(.init(
+            candles: candles,
+            indicatorInstances: indicatorInstances,
+            indicatorConfig: indicatorConfig,
+            indicators: indicators,
+            srLevels: srLevels,
+            fvgZones: fvgZones,
+            supplyDemandZones: supplyDemandZones,
+            indicatorFvgZones: indicatorFvgZones,
+            orderBlockZones: orderBlockZones,
+            steroidOrderBlockZones: steroidOrderBlockZones,
+            sonarlabOBZones: sonarlabOBZones,
+            ichimokuOutput: ichimokuOutput,
+            ichimokuOBZones: ichimokuOBZones,
+            rankedOBZones: rankedOBZones,
+            volumeFilteredOBZones: volumeFilteredOBZones,
+            chochZones: chochZones,
+            htfChochZones: htfChochZones,
+            sessionRuns: sessionRuns,
+            nySetupResults: nySetupResults,
+            sp2lResults: sp2lResults,
+            pinBarComboResults: pinBarComboResults,
+            microMapResults: microMapResults,
+            mtrResults: mtrResults,
+            volumeProfileSessions: volumeProfileSessions,
+            zigzagTrendVP: zigzagTrendVP,
+            visibleRangeVP: visibleRangeVP,
+            zigzagPivots: zigzagPivots,
+            taScenario: taScenario,
+            taAltScenario: taAltScenario,
+            drawings: drawings,
+            trades: trades,
+            journalEntries: journalEntries
+        ))
+        if overlay.lo < lo { lo = overlay.lo }
+        if overlay.hi > hi { hi = overlay.hi }
         if let focus = notificationFocus {
             if focus.price < lo { lo = focus.price }
             if focus.price > hi { hi = focus.price }
-        }
-        for session in volumeProfileSessions {
-            for bucket in session.buckets {
-                if bucket.priceLevel < lo { lo = bucket.priceLevel }
-                if bucket.priceLevel > hi { hi = bucket.priceLevel }
-            }
-        }
-        if let vp = zigzagTrendVP {
-            for bucket in vp.buckets {
-                if bucket.priceLevel < lo { lo = bucket.priceLevel }
-                if bucket.priceLevel > hi { hi = bucket.priceLevel }
-            }
-        }
-        for pivot in zigzagPivots {
-            if pivot.price < lo { lo = pivot.price }
-            if pivot.price > hi { hi = pivot.price }
-        }
-        if let scenario = taScenario {
-            for v in [scenario.takeProfit, scenario.stopLoss] + [scenario.entry].compactMap({ $0 }) {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
-        if let alt = taAltScenario {
-            for v in [alt.takeProfit, alt.stopLoss] + [alt.entry].compactMap({ $0 }) {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
-        for d in drawings where d.visible {
-            if d.start.price < lo { lo = d.start.price }
-            if d.start.price > hi { hi = d.start.price }
-            if let e = d.end {
-                if e.price < lo { lo = e.price }
-                if e.price > hi { hi = e.price }
-            }
-        }
-        for t in trades {
-            for v in [t.entry, t.takeProfit, t.stopLoss, t.fillPrice ?? t.entry] {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
-        }
-        for je in journalEntries {
-            for v in [je.entry, je.takeProfit, je.stopLoss].compactMap({ $0 }) {
-                if v < lo { lo = v }
-                if v > hi { hi = v }
-            }
         }
 
         guard visibleCandles.isEmpty == false else { return 0...1 }
@@ -4752,4 +5601,71 @@ struct ChartView: View {
         f.dateFormat = "MMM d · HH:mm"
         return f
     }()
+}
+
+// MARK: - Equatable (re-render isolation)
+
+/// `ChartView` is expensive (Apple Charts re-lays out its whole mark tree
+/// on every body evaluation), and it's re-evaluated far more often than
+/// its *drawn* inputs actually change: every `YahooScheduler`
+/// `objectWillChange` (≈1 Hz, plus every unrelated `@Published` field —
+/// `isFetching`, `backfilling`, other pairs' prices…) invalidates the
+/// owning `DashboardView` / `ChartPaneView`, which cascades a re-eval down
+/// into this chart even when nothing here moved. In grid mode that cost is
+/// paid N× (one price chart per pane, plus volume + oscillator sub-charts),
+/// which is the dominant source of split-screen lag.
+///
+/// Conforming to `Equatable` and wrapping the call sites in `.equatable()`
+/// lets SwiftUI skip re-invoking `body` (and thus the Charts layout pass)
+/// whenever none of the render-affecting inputs changed. Closures
+/// (`onCommitDrawing`, …) and internal `@State` (hover, in-flight drawing)
+/// are deliberately excluded: closures don't affect what's drawn (and are
+/// re-captured whenever `==` returns false anyway), and self-`@State`
+/// changes bypass this gate entirely — hover crosshair and live drawing
+/// previews still redraw normally.
+///
+/// The candle series is compared via `Candle.seriesEqual` (O(1)) rather
+/// than a full element-wise `==`, so this stays cheap even on the hot
+/// pan/zoom path (which changes `xDomain` and legitimately forces a
+/// redraw) with years of history loaded.
+extension ChartView: Equatable {
+    static func == (l: ChartView, r: ChartView) -> Bool {
+        Candle.seriesEqual(l.candles, r.candles)
+            && l.chartType == r.chartType
+            && l.accent == r.accent
+            && l.xDomain == r.xDomain
+            && l.yDomain == r.yDomain
+            && l.indicators == r.indicators
+            && l.indicatorConfig == r.indicatorConfig
+            && l.indicatorInstances == r.indicatorInstances
+            && l.htfChochZones == r.htfChochZones
+            && l.srLevels == r.srLevels
+            && l.fvgZones == r.fvgZones
+            && l.supplyDemandZones == r.supplyDemandZones
+            && l.taScenario == r.taScenario
+            && l.taAltScenario == r.taAltScenario
+            && l.drawings == r.drawings
+            && l.activeTool == r.activeTool
+            && l.selectedDrawingID == r.selectedDrawingID
+            && l.trades == r.trades
+            && l.journalEntries == r.journalEntries
+            && l.livePrice == r.livePrice
+            && l.replayActive == r.replayActive
+            && l.isPickingReplayAnchor == r.isPickingReplayAnchor
+            && l.showHoverTooltip == r.showHoverTooltip
+            && Self.newsEqual(l.newsEvents, r.newsEvents)
+            && l.newsTimeZone == r.newsTimeZone
+    }
+
+    /// Cheap news-list comparison for the Equatable perf gate: same
+    /// ids in the same order, and the same `actual` values (so a
+    /// freshly-scraped actual re-renders the open popover). Avoids a
+    /// full `ForexFactoryEvent` compare on every 1 Hz tick.
+    private static func newsEqual(_ a: [ForexFactoryEvent], _ b: [ForexFactoryEvent]) -> Bool {
+        guard a.count == b.count else { return false }
+        for i in a.indices where a[i].id != b[i].id || a[i].actual != b[i].actual {
+            return false
+        }
+        return true
+    }
 }

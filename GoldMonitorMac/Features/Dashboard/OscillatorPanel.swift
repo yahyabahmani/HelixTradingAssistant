@@ -218,13 +218,64 @@ struct OscillatorPanel: View {
         return c
     }
 
+    // ── Visible-points memoization ───────────────────────────────────
+    //
+    // `visiblePoints` filters `computedPoints` to the visible bar
+    // window. Previously it rebuilt a `Set<Int>` from
+    // `renderIndices` + filtered the full array on every body eval.
+    // In grid mode with 4 panes × 2 oscillators = 8 calls per tick,
+    // that's 8 Set allocations + 8 full-array filters per frame.
+    //
+    // Cache keyed on (domain bounds, candle count, computed count).
+    // During pan/zoom only the domain changes — the Set rebuild is
+    // still O(visible bars), but the filter is skipped when the
+    // domain is unchanged (e.g. on a tick where no new bar arrived).
+
+    private struct VisiblePointsCache {
+        let domainLo: Double
+        let domainHi: Double
+        let candleCount: Int
+        let computedCount: Int
+        let points: [IndicatorPoint]
+    }
+    /// Class box to avoid "Modifying state during view update" —
+    /// `visiblePoints` is a computed property called from `body`.
+    private final class VisiblePointsCacheBox {
+        var cached: VisiblePointsCache?
+    }
+    private let _vpCacheBox = VisiblePointsCacheBox()
+
     /// computedPoints restricted to the bar indices actually rendered
     /// this frame — keeps mark count bounded on deep history, matching
     /// the price chart's windowing. Latest-value readouts still read the
     /// full series so they never go stale when zoomed in.
     private var visiblePoints: [IndicatorPoint] {
-        let set = Set(ChartWindow.renderIndices(domain: effectiveDomain, count: candles.count))
-        return computedPoints.filter { set.contains($0.index) }
+        let domain = effectiveDomain
+        let computed = computedPoints
+        let cacheKey = VisiblePointsCache(
+            domainLo: domain.lowerBound,
+            domainHi: domain.upperBound,
+            candleCount: candles.count,
+            computedCount: computed.count,
+            points: []
+        )
+        if let cached = _vpCacheBox.cached,
+           cached.domainLo == cacheKey.domainLo,
+           cached.domainHi == cacheKey.domainHi,
+           cached.candleCount == cacheKey.candleCount,
+           cached.computedCount == cacheKey.computedCount {
+            return cached.points
+        }
+        let set = Set(ChartWindow.renderIndices(domain: domain, count: candles.count))
+        let result = computed.filter { set.contains($0.index) }
+        _vpCacheBox.cached = VisiblePointsCache(
+            domainLo: cacheKey.domainLo,
+            domainHi: cacheKey.domainHi,
+            candleCount: cacheKey.candleCount,
+            computedCount: cacheKey.computedCount,
+            points: result
+        )
+        return result
     }
 
     // MARK: - Scales
@@ -272,4 +323,19 @@ struct OscillatorPanel: View {
     private var signalColor:   Color { Color(red: 1.00, green: 0.45, blue: 0.65) }
     private var stochKColor:   Color { Color(red: 0.38, green: 0.65, blue: 1.00) }
     private var stochDColor:   Color { Color(red: 1.00, green: 0.45, blue: 0.65) }
+}
+
+/// See `ChartView`'s `Equatable` note — same rationale, scoped to one
+/// oscillator sub-chart. In grid mode each pane can stack several of
+/// these, so gating their re-layout on actual input changes (not on every
+/// live tick that ripples through the pane) is a big part of the
+/// split-screen win. The oscillator math itself is already memoized by
+/// this view's own `ChartDerivedCache`; this stops the Charts *layout*
+/// pass from running needlessly on top of that.
+extension OscillatorPanel: Equatable {
+    static func == (l: OscillatorPanel, r: OscillatorPanel) -> Bool {
+        l.instance == r.instance
+            && Candle.seriesEqual(l.candles, r.candles)
+            && l.xDomain == r.xDomain
+    }
 }

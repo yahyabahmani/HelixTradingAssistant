@@ -8,20 +8,28 @@ struct RiskCalculatorView: View {
     @State private var entryPrice: String = ""
     @State private var stopPrice:  String = ""
 
-    // $10/point/lot is the standard XAUUSD broker convention (1 standard lot = 100 oz)
-    private let dollarPerPointPerLot: Double = 10.0
+    /// This popover is the gold calculator, so it pins to the XAUUSD
+    /// spec (1 lot = 100 oz ⇒ $100 per $1.00 of price). Note the stop
+    /// distance below is a raw *price* difference — brokers quote gold
+    /// as "$10 per point" where a point is $0.10, and mixing the two
+    /// conventions is a silent 10× sizing error.
+    private let spec = ContractSpec.forPair(id: "ounce")
 
     private var entry: Double? { Double(entryPrice.replacingOccurrences(of: ",", with: ".")) }
     private var stop:  Double? { Double(stopPrice.replacingOccurrences(of: ",", with: ".")) }
-    private var pipDistance: Double? {
+    private var stopDistance: Double? {
         guard let e = entry, let s = stop, e != s else { return nil }
         return abs(e - s)
     }
     private var dollarRisk: Double { accountBalance * riskPercent / 100 }
-    private var lotSize: Double? {
-        guard let dist = pipDistance, dist > 0 else { return nil }
-        return dollarRisk / (dist * dollarPerPointPerLot)
+    private var metrics: PositionMetrics? {
+        guard let e = entry, let s = stop else { return nil }
+        return PositionMetrics.compute(
+            entry: e, stop: s, target: nil,
+            balance: accountBalance, riskPercent: riskPercent, spec: spec
+        )
     }
+    private var lotSize: Double? { metrics?.lots }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -88,20 +96,20 @@ struct RiskCalculatorView: View {
                           String(format: "$%.2f", dollarRisk),
                           Theme.Color.danger)
 
-                if let dist = pipDistance {
+                if let dist = stopDistance {
                     resultRow("Stop Distance",
-                              String(format: "%.2f pts", dist),
+                              String(format: "$%.2f", dist),
                               Theme.Color.textSecondary)
                 }
 
                 if let lots = lotSize {
                     Divider().background(Theme.Color.border)
                     resultRow("Lot Size (XAUUSD)",
-                              String(format: "%.2f lots", lots),
+                              String(format: "%.3f lots", lots),
                               Theme.Color.accentStart,
                               large: true)
                     resultRow("Mini lots",
-                              String(format: "%.1f", lots * 10),
+                              String(format: "%.2f", lots * 10),
                               Theme.Color.textMuted)
                 } else if !entryPrice.isEmpty || !stopPrice.isEmpty {
                     Text("Enter both entry and stop loss to get lot size.")
@@ -115,7 +123,7 @@ struct RiskCalculatorView: View {
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.Color.border, lineWidth: 1))
             .padding(.bottom, 8)
 
-            Text("$10/point/lot — XAUUSD standard lots")
+            Text("XAUUSD standard lots — 1 lot = 100 oz ($100 per $1.00 move)")
                 .font(.system(size: 9))
                 .foregroundStyle(Theme.Color.textMuted)
         }

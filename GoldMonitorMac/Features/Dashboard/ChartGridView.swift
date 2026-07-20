@@ -165,13 +165,21 @@ struct ChartGridView<FullscreenToolbar: View>: View {
         .onChange(of: layoutStore.layout) { _ in
             fullscreenPaneID = nil
         }
-        // When syncSymbol is on, pushing a new pair from the sidebar
-        // should update every pane in the grid — otherwise the sidebar
-        // selection is silently ignored in grid mode.
+        // Sidebar symbol selection in grid mode. With `syncSymbol` on it
+        // updates every pane; with it off it updates just the focused pane
+        // (falling back to the first pane so a pick is never a silent
+        // no-op — the original bug was that it required `syncSymbol` and so
+        // did nothing in the common off-by-default case).
         .onChange(of: app.selectedPairID) { newPairID in
-            guard layoutStore.syncSymbol, let newPairID else { return }
+            guard let newPairID else { return }
             var updated = layoutStore.panes
-            for i in updated.indices { updated[i].pairID = newPairID }
+            if layoutStore.syncSymbol {
+                for i in updated.indices { updated[i].pairID = newPairID }
+            } else {
+                let targetID = layoutStore.focusedPaneID ?? updated.first?.id
+                guard let idx = updated.firstIndex(where: { $0.id == targetID }) else { return }
+                updated[idx].pairID = newPairID
+            }
             layoutStore.panes = updated
         }
     }
@@ -259,6 +267,20 @@ struct ChartGridView<FullscreenToolbar: View>: View {
             let isFullscreenSibling = fullscreenPaneID != nil && fullscreenPaneID != p.id
             let isHidden = isFullscreenSibling
             let isThisPaneFullscreen = fullscreenSlot == slot
+            // The focused pane is the sidebar's symbol-change target while
+            // syncSymbol is off. Fall back to the first pane so a ring is
+            // always shown (and a sidebar pick always lands somewhere).
+            let effectiveFocusID = layoutStore.focusedPaneID ?? panes.first?.id
+            let isFocused = effectiveFocusID == p.id
+            // Only surface the focus affordance when it's meaningful:
+            // multiple panes, none fullscreen, and symbols aren't synced
+            // (when synced every pane changes together, so "which one" is
+            // moot).
+            let showsFocusRing = isFocused
+                && layout != .single
+                && fullscreenPaneID == nil
+                && !layoutStore.syncSymbol
+                && panes.count > 1
             ChartPaneView(
                 pane: p,
                 indicatorConfig: indicatorConfig,
@@ -278,7 +300,15 @@ struct ChartGridView<FullscreenToolbar: View>: View {
                 // it's collapsed behind a fullscreen sibling — see
                 // `ChartPaneView.isVisible`.
                 isVisible: !isHidden,
-                fullscreenDrawingTool: $activeDrawingTool
+                fullscreenDrawingTool: $activeDrawingTool,
+                // Clicking anywhere in the pane makes it the sidebar's
+                // symbol-change target. Also sync the sidebar highlight to
+                // this pane's current pair so the selection reads as
+                // "editing this chart".
+                onFocus: {
+                    layoutStore.focusedPaneID = p.id
+                    if app.selectedPairID != p.pairID { app.selectedPairID = p.pairID }
+                }
             ) { updated in
                 layoutStore.updatePane(updated)
             }
@@ -286,6 +316,15 @@ struct ChartGridView<FullscreenToolbar: View>: View {
             .opacity(isHidden ? 0 : 1)
             .allowsHitTesting(!isHidden)
             .clipped()
+            // Focus ring — marks which pane a sidebar symbol pick will
+            // change while symbols aren't synced.
+            .overlay {
+                if showsFocusRing {
+                    RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                        .strokeBorder(Theme.accentGradient, lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
         } else {
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

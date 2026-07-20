@@ -80,7 +80,40 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
         case trendLine
         case rectangle
         case volumeProfile
+        case longPosition
+        case shortPosition
+
+        /// Position tools carry stop/target levels and risk settings the
+        /// other shapes don't, and are rendered and hit-tested as a
+        /// three-level box rather than a plain shape.
+        var isPosition: Bool { self == .longPosition || self == .shortPosition }
+
+        /// A long profits above entry; a short profits below.
+        var isLong: Bool { self == .longPosition }
     }
+
+    // ── Position-tool fields ────────────────────────────────────────
+    //
+    // Only meaningful when `kind.isPosition`. For a position, `start`
+    // is (left edge, entry price) and `end` is (right edge, entry
+    // price) — the box's vertical extent comes from `stopPrice` and
+    // `targetPrice` instead of `end.price`, because a position needs
+    // three levels rather than two corners.
+
+    /// Stop-loss price. The risk leg of the box.
+    var stopPrice: Double?
+
+    /// Take-profit price. The reward leg. Optional — a position can be
+    /// planned with a stop only.
+    var targetPrice: Double?
+
+    /// Account balance this position sizes against. Seeded from the
+    /// Risk Calculator's stored balance at creation, then editable per
+    /// position so different scenarios can sit on one chart.
+    var accountBalance: Double?
+
+    /// Percent of `accountBalance` risked if the stop fills.
+    var riskPercent: Double?
 
     init(
         id: UUID = UUID(),
@@ -89,7 +122,11 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
         end: DrawingPoint?,
         visible: Bool = true,
         color: ColorRGBA = .defaultStroke,
-        lineWidth: Double = 1.5
+        lineWidth: Double = 1.5,
+        stopPrice: Double? = nil,
+        targetPrice: Double? = nil,
+        accountBalance: Double? = nil,
+        riskPercent: Double? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -98,6 +135,10 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
         self.visible = visible
         self.color = color
         self.lineWidth = lineWidth
+        self.stopPrice = stopPrice
+        self.targetPrice = targetPrice
+        self.accountBalance = accountBalance
+        self.riskPercent = riskPercent
     }
 
     // ── Back-compat decoding ────────────────────────────────────────
@@ -108,6 +149,7 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, kind, start, end, visible, color, lineWidth
+        case stopPrice, targetPrice, accountBalance, riskPercent
     }
 
     init(from decoder: Decoder) throws {
@@ -119,6 +161,12 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
         visible   = try c.decodeIfPresent(Bool.self, forKey: .visible) ?? true
         color     = try c.decodeIfPresent(ColorRGBA.self, forKey: .color) ?? .defaultStroke
         lineWidth = try c.decodeIfPresent(Double.self, forKey: .lineWidth) ?? 1.5
+        // Position fields are absent on every drawing persisted before
+        // the position tool existed, and on non-position shapes.
+        stopPrice      = try c.decodeIfPresent(Double.self, forKey: .stopPrice)
+        targetPrice    = try c.decodeIfPresent(Double.self, forKey: .targetPrice)
+        accountBalance = try c.decodeIfPresent(Double.self, forKey: .accountBalance)
+        riskPercent    = try c.decodeIfPresent(Double.self, forKey: .riskPercent)
     }
 
     /// Identifies which endpoint of a drawing a handle represents.
@@ -128,6 +176,11 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
         case start              // trend line / horizontal: anchor point
         case end                // trend line: second endpoint
         case topLeft, topRight, bottomLeft, bottomRight  // rectangle corners
+        // Position tool. `entry` moves both price and time (it owns the
+        // box's left edge); `stop`/`target` are price-only; `timeEnd`
+        // is time-only, so the box can be stretched horizontally
+        // without disturbing any level.
+        case entry, stop, target, timeEnd
     }
 
     /// Produce a copy of this drawing with one endpoint moved to
@@ -141,6 +194,27 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
     func resized(anchor: Handle, to cursor: DrawingPoint) -> ChartDrawing {
         var copy = self
         switch kind {
+        case .longPosition, .shortPosition:
+            switch anchor {
+            case .entry, .start:
+                // Entry drags in both axes: the price moves with the
+                // cursor and the box's left edge follows. Stop and
+                // target hold their absolute prices so dragging entry
+                // re-shapes risk/reward rather than sliding the whole
+                // setup (that's what a body drag is for).
+                copy.start = cursor
+            case .stop:
+                copy.stopPrice = cursor.price
+            case .target:
+                copy.targetPrice = cursor.price
+            case .timeEnd, .end:
+                // Horizontal stretch only — the right edge keeps the
+                // entry price so the box stays level.
+                copy.end = DrawingPoint(date: cursor.date, price: copy.start.price)
+            default:
+                break
+            }
+            return copy
         case .volumeProfile:
             // VP uses same two-corner semantics as rectangle
             guard let oldEnd = copy.end else { return copy }
@@ -155,6 +229,8 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
             case .bottomLeft:
                 copy.start = DrawingPoint(date: cursor.date, price: copy.start.price)
                 copy.end   = DrawingPoint(date: copy.end?.date ?? oldEnd.date, price: cursor.price)
+            default:
+                break   // position anchors don't apply to volume profiles
             }
             return copy
         case .horizontalLine:
@@ -188,9 +264,65 @@ struct ChartDrawing: Identifiable, Codable, Equatable {
             case .bottomLeft:
                 copy.start = DrawingPoint(date: cursor.date,       price: copy.start.price)
                 copy.end   = DrawingPoint(date: copy.end?.date ?? oldEnd.date, price: cursor.price)
+            default:
+                break   // position anchors don't apply to rectangles
             }
         }
         return copy
+    }
+
+    // MARK: - Position helpers
+
+    /// Entry price for a position drawing (`start.price` by
+    /// construction). `nil` for every other shape.
+    var entryPrice: Double? {
+        kind.isPosition ? start.price : nil
+    }
+
+    /// Sizing + P/L for a position, given the instrument's contract
+    /// spec. `nil` when this isn't a position, when the stop is missing
+    /// or sits exactly at entry, or when the risk settings are unset —
+    /// all cases where there is no honest number to display.
+    func positionMetrics(spec: ContractSpec) -> PositionMetrics? {
+        guard kind.isPosition,
+              let stop = stopPrice,
+              let balance = accountBalance,
+              let risk = riskPercent
+        else { return nil }
+        return PositionMetrics.compute(
+            entry: start.price,
+            stop: stop,
+            target: targetPrice,
+            balance: balance,
+            riskPercent: risk,
+            spec: spec
+        )
+    }
+
+    /// Build a position with stop/target placed a sensible distance from
+    /// entry, used when the tool commits a fresh drawing. The drag
+    /// height sets the stop distance so the box matches the gesture;
+    /// the target defaults to 2R above/below entry.
+    static func position(
+        long: Bool,
+        entry: DrawingPoint,
+        end: DrawingPoint,
+        stopDistance: Double,
+        balance: Double,
+        riskPercent: Double
+    ) -> ChartDrawing {
+        let dist = abs(stopDistance)
+        let stop   = long ? entry.price - dist : entry.price + dist
+        let target = long ? entry.price + dist * 2 : entry.price - dist * 2
+        return ChartDrawing(
+            kind: long ? .longPosition : .shortPosition,
+            start: entry,
+            end: DrawingPoint(date: end.date, price: entry.price),
+            stopPrice: stop,
+            targetPrice: target,
+            accountBalance: balance,
+            riskPercent: riskPercent
+        )
     }
 }
 
@@ -208,6 +340,8 @@ enum DrawingTool: String, CaseIterable, Identifiable, Equatable {
     case trendLine
     case rectangle
     case volumeProfile
+    case longPosition
+    case shortPosition
 
     var id: String { rawValue }
 
@@ -218,6 +352,8 @@ enum DrawingTool: String, CaseIterable, Identifiable, Equatable {
         case .trendLine:      return "Trend line"
         case .rectangle:      return "Rectangle"
         case .volumeProfile:  return "Volume Profile"
+        case .longPosition:   return "Long position"
+        case .shortPosition:  return "Short position"
         }
     }
 
@@ -228,6 +364,17 @@ enum DrawingTool: String, CaseIterable, Identifiable, Equatable {
         case .trendLine:      return "line.diagonal"
         case .rectangle:      return "rectangle"
         case .volumeProfile:  return "chart.bar.xaxis.ascending"
+        case .longPosition:   return "arrow.up.right.square"
+        case .shortPosition:  return "arrow.down.right.square"
+        }
+    }
+
+    /// The drawing kind this tool commits, if it maps to one.
+    var positionKind: ChartDrawing.Kind? {
+        switch self {
+        case .longPosition:  return .longPosition
+        case .shortPosition: return .shortPosition
+        default:             return nil
         }
     }
 }
@@ -245,6 +392,18 @@ enum DrawingPalette {
     static let stroke  = Color(red: 1.00, green: 0.78, blue: 0.20)
     static let fill    = Color(red: 1.00, green: 0.78, blue: 0.20).opacity(0.16)
     static let preview = Color(red: 1.00, green: 0.78, blue: 0.20).opacity(0.55)
+
+    // ── Position tool ───────────────────────────────────────────────
+    //
+    // The position box is the one place green/red *should* be used:
+    // profit and loss zones are the whole point of the tool, and
+    // TradingView's convention is strong enough that any other palette
+    // would read as wrong. Kept desaturated so candles stay legible
+    // through the translucent fills.
+    static let profit     = Color(red: 0.13, green: 0.72, blue: 0.47)
+    static let loss       = Color(red: 0.90, green: 0.30, blue: 0.34)
+    static let entryLine  = Color(red: 0.60, green: 0.65, blue: 0.72)
+    static let zoneAlpha  = 0.18
 }
 
 // MARK: - SwiftUI.Color ↔ ColorRGBA bridge

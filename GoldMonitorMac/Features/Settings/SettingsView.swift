@@ -303,7 +303,7 @@ struct SettingsView: View {
                     marketRow(
                         symbol: "chart.line.uptrend.xyaxis",
                         title: "Indices",
-                        subtitle: "Dow Jones (DJI) via Yahoo polling — 15m delayed"
+                        subtitle: "Dow Jones (DJI) via Yahoo polling — 15m delayed; DXY via Faraz"
                     )
                 }
                 .toggleStyle(.switch)

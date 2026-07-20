@@ -22,8 +22,8 @@ struct NewsView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Theme.Color.canvas)
-        .onAppear { store.startAutoRefresh() }
-        .onDisappear { store.stopAutoRefresh() }
+        .onAppear { store.retainAutoRefresh() }
+        .onDisappear { store.releaseAutoRefresh() }
     }
 
     // MARK: - Header

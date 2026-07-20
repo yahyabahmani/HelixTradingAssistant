@@ -29,11 +29,32 @@ struct DrawingDeleteKeyHandler: ViewModifier {
             guard event.keyCode == 51 || event.keyCode == 117 else {
                 return event
             }
+            // Text entry wins. The drawing inspector has editable
+            // balance / risk fields, and a selected drawing would
+            // otherwise be deleted the moment the user backspaces to
+            // clear one — the keystroke never reaching the field.
+            guard !Self.isEditingText else { return event }
             guard let id = selectedDrawingID else { return event }
             drawingStore.remove(id: id, for: pairID)
             selectedDrawingID = nil
             return nil // consumed
         }
+    }
+
+    /// Is the keyboard currently inside a text editor?
+    ///
+    /// A focused `NSTextField` hands first-responder status to the
+    /// window's shared *field editor* (an `NSTextView`), so checking for
+    /// the text field itself isn't enough — the field editor is what
+    /// actually holds focus while typing. Popovers get their own window,
+    /// which is why this reads `keyWindow` rather than `mainWindow`.
+    private static var isEditingText: Bool {
+        guard let responder = (NSApp.keyWindow ?? NSApp.mainWindow)?.firstResponder
+        else { return false }
+        if let textView = responder as? NSTextView {
+            return textView.isFieldEditor || textView.isEditable
+        }
+        return responder is NSTextField
     }
 
     private func removeMonitor() {

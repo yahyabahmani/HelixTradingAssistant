@@ -7,19 +7,21 @@ import SwiftUI
 /// Bucket math matches `CandleAggregator.aggregate`: every bar boundary
 /// is at a `seconds-since-epoch` value divisible by `timeframe.seconds`.
 /// The next close = floor(now / bucketSize) * bucketSize + bucketSize.
+///
+/// Uses `TimelineView(.periodic)` instead of `Timer.publish` + `@State`
+/// to avoid "Modifying state during view update" warnings — the timer
+/// fires during scroll/drag and compounds with chart updates.
 struct TimeframeCountdown: View {
     let timeframe: Timeframe
 
-    /// Refreshed once per second. Initialised with `Date()` so the
-    /// first render already shows a meaningful value rather than 0.
-    @State private var now: Date = Date()
-
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "hourglass")
-                .font(.system(size: 9, weight: .semibold))
-            Text("\(timeframe.label) closes in \(remainingText)")
-                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 4) {
+                Image(systemName: "hourglass")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("\(timeframe.label) closes in \(remainingText(now: context.date))")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+            }
         }
         .foregroundStyle(Theme.Color.textSecondary)
         .padding(.horizontal, 6)
@@ -27,12 +29,6 @@ struct TimeframeCountdown: View {
         .background(
             Capsule().fill(Theme.Color.surface)
         )
-        // `.common` keeps the tick firing during scrolls / drags — we
-        // don't want the countdown to freeze while the user is panning
-        // the chart.
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { t in
-            now = t
-        }
     }
 
     // ── Math ──────────────────────────────────────────────────────────
@@ -40,7 +36,7 @@ struct TimeframeCountdown: View {
     /// Seconds until the next candle boundary. Clamped to ≥ 0 so a
     /// tick that lands a hair past the boundary doesn't briefly show a
     /// negative number before the new bucket starts.
-    private var remainingSeconds: Int {
+    private func remainingSeconds(now: Date) -> Int {
         let bucketSize = timeframe.seconds
         guard bucketSize > 0 else { return 0 }
         let nowSecs = now.timeIntervalSince1970
@@ -51,8 +47,8 @@ struct TimeframeCountdown: View {
 
     /// "23m 14s" / "1h 04m 12s" / "12s" — compact, drops empty leading
     /// units so short-TF countdowns don't show useless `0h 0m 23s`.
-    private var remainingText: String {
-        let total = remainingSeconds
+    private func remainingText(now: Date) -> String {
+        let total = remainingSeconds(now: now)
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60

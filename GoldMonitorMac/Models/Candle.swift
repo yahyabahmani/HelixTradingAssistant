@@ -24,6 +24,27 @@ struct Candle: Identifiable, Hashable {
     }
 }
 
+extension Candle {
+    /// Cheap O(1) equality proxy for a whole candle *series*, used by the
+    /// `Equatable` chart views (`ChartView`, `VolumeBarsView`,
+    /// `OscillatorPanel`) to decide whether a parent-driven re-render
+    /// actually changed the drawn data. Mirrors the signature the
+    /// `ChartDerivedCache` already keys on: the series only ever changes
+    /// by a full reload (count / first bar differ) or by rewriting the
+    /// trailing bar on a live tick (last bar differs). Comparing count +
+    /// first id + last bar catches every one of those without an O(n)
+    /// element-wise walk on the hot pan/zoom path.
+    static func seriesEqual(_ a: [Candle], _ b: [Candle]) -> Bool {
+        guard a.count == b.count else { return false }
+        guard let fa = a.first, let fb = b.first else { return a.isEmpty && b.isEmpty }
+        guard fa.id == fb.id, let la = a.last, let lb = b.last else { return false }
+        return la.id == lb.id
+            && la.open == lb.open && la.high == lb.high
+            && la.low == lb.low && la.close == lb.close
+            && la.volume == lb.volume
+    }
+}
+
 /// Supported analysis timeframes. Same set as the web app's
 /// [`ChartAnalysisPanel`](../../newWebapp2/src/components/Chart/ChartAnalysisPanel.tsx).
 enum Timeframe: String, CaseIterable, Identifiable, Codable {

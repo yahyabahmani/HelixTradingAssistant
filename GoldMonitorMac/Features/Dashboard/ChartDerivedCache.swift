@@ -137,19 +137,25 @@ final class ChartDerivedCache: ObservableObject {
         guard slot.signature != signature else { return slot.value }
         slot.task?.cancel()
 
-        // First-time computation (no prior signature): compute
-        // synchronously so the indicator appears immediately when
-        // the user enables it. Subsequent updates (data ticks,
-        // config tweaks) use the background queue.
-        if slot.signature == nil {
-            let fresh = compute()
-            slot.value = fresh
-            slot.signature = signature
-            coalescedObjectWillChange()
-            return fresh
-        }
-
-        // Capture everything the detached task needs.
+        // Always compute on a background `Task` — including the FIRST time
+        // for a slot. The old fast-path computed the initial value inline
+        // on the main thread "so the indicator appears immediately", but
+        // that's exactly what hitches the UI when the multi-chart grid
+        // mounts: every new pane's every indicator/order-block/… computes
+        // synchronously over full history, on the main thread, for 2–4
+        // panes at once. Deferring it a frame (the chart draws candles
+        // now, overlays land a beat later) keeps the split-screen switch
+        // smooth. The concurrency limiter (`maxConcurrent`) still caps how
+        // many run at once so the pool doesn't saturate.
+        //
+        // Set `signature` OPTIMISTICALLY here, before the task runs, rather
+        // than on completion. Otherwise every re-render before the compute
+        // lands would see an unchanged (stale) `slot.signature`, decide the
+        // work is still pending, and cancel + re-spawn — a perpetual
+        // recompute that never finishes when renders outpace the compute.
+        // A genuinely newer signature still differs from this one, so it
+        // correctly cancels and supersedes.
+        slot.signature = signature
         let spawn: () -> Void = { [weak self] in
             slot.task = Task.detached(priority: .userInitiated) {
                 let fresh = compute()
@@ -157,9 +163,14 @@ final class ChartDerivedCache: ObservableObject {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
-                    self.coalescedObjectWillChange()
+                    // A superseding recompute may have raced ahead while
+                    // this one was queued (queued spawns can't be
+                    // cancelled before they start). Only publish if this
+                    // result is still for the wanted signature, so a stale
+                    // compute can never clobber a fresher value.
+                    guard slot.signature == signature else { return }
                     slot.value = fresh
-                    slot.signature = signature
+                    self.coalescedObjectWillChange()
                 }
             }
         }
@@ -449,6 +460,31 @@ final class ChartDerivedCache: ObservableObject {
         }
     }
 
+    // ── Ranked Order Blocks (swing + VP + Ichimoku) ────────────────
+
+    private struct RankedOBSig: Equatable {
+        let count: Int
+        let firstTS: TimeInterval
+        let lastClose: Double
+        let config: RankedOrderBlocks.Config
+    }
+    private let rankedOBSlot = Slot<RankedOBSig, [RankedOrderBlocks.Zone]>([])
+
+    func rankedOrderBlocks(
+        candles: [Candle],
+        config: RankedOrderBlocks.Config
+    ) -> [RankedOrderBlocks.Zone] {
+        let sig = RankedOBSig(
+            count: candles.count,
+            firstTS: candles.first?.id.timeIntervalSince1970 ?? 0,
+            lastClose: candles.last?.close ?? 0,
+            config: config
+        )
+        return resolve(rankedOBSlot, signature: sig) {
+            RankedOrderBlocks.compute(candles, config: config)
+        }
+    }
+
     // ── Change of Character (CHoCH + OB/FVG confluence) ────────────────
 
     private struct CHoCHSig: Equatable {
@@ -492,20 +528,182 @@ final class ChartDerivedCache: ObservableObject {
         }
     }
 
+    // ── Ichimoku Cloud ─────────────────────────────────────────────────
+
+    private struct IchimokuSig: Equatable {
+        let count: Int
+        let firstTS: TimeInterval
+        let lastClose: Double
+        let tenkan: Int
+        let kijun: Int
+        let senkouB: Int
+        let displacement: Int
+    }
+    private let ichimokuSlot = Slot<IchimokuSig, Ichimoku.Output>(.empty)
+
+    func ichimoku(
+        candles: [Candle],
+        tenkan: Int,
+        kijun: Int,
+        senkouB: Int,
+        displacement: Int
+    ) -> Ichimoku.Output {
+        let sig = IchimokuSig(
+            count: candles.count,
+            firstTS: candles.first?.id.timeIntervalSince1970 ?? 0,
+            lastClose: candles.last?.close ?? 0,
+            tenkan: tenkan,
+            kijun: kijun,
+            senkouB: senkouB,
+            displacement: displacement
+        )
+        return resolve(ichimokuSlot, signature: sig) {
+            Ichimoku.compute(
+                candles,
+                tenkan: tenkan,
+                kijun: kijun,
+                senkouB: senkouB,
+                displacement: displacement
+            )
+        }
+    }
+
+    // ── Ichimoku-confluence Order Blocks ───────────────────────────────
+
+    private struct IchimokuOBSig: Equatable {
+        let count: Int
+        let firstTS: TimeInterval
+        let periods: Int
+        let threshold: Double
+        let useWicks: Bool
+        let tenkan: Int
+        let kijun: Int
+        let senkouB: Int
+        let displacement: Int
+        let minScore: Int
+        let requireTrend: Bool
+    }
+    private let ichimokuOBSlot = Slot<IchimokuOBSig, [IchimokuOrderBlocks.Zone]>([])
+
+    func ichimokuOrderBlocks(
+        candles: [Candle],
+        periods: Int,
+        threshold: Double,
+        useWicks: Bool,
+        tenkan: Int,
+        kijun: Int,
+        senkouB: Int,
+        displacement: Int,
+        minScore: Int,
+        requireTrend: Bool
+    ) -> [IchimokuOrderBlocks.Zone] {
+        let sig = IchimokuOBSig(
+            count: candles.count,
+            firstTS: candles.first?.id.timeIntervalSince1970 ?? 0,
+            periods: periods,
+            threshold: threshold,
+            useWicks: useWicks,
+            tenkan: tenkan,
+            kijun: kijun,
+            senkouB: senkouB,
+            displacement: displacement,
+            minScore: minScore,
+            requireTrend: requireTrend
+        )
+        return resolve(ichimokuOBSlot, signature: sig) {
+            IchimokuOrderBlocks.compute(
+                candles,
+                periods: periods,
+                threshold: threshold,
+                useWicks: useWicks,
+                tenkan: tenkan,
+                kijun: kijun,
+                senkouB: senkouB,
+                displacement: displacement,
+                minScore: minScore,
+                requireTrendAgreement: requireTrend
+            )
+        }
+    }
+
+    // ── Volume-Filtered Order Blocks ───────────────────────────────────
+
+    private struct VFOBSig: Equatable {
+        let count: Int
+        let firstTS: TimeInterval
+        let lastTS: TimeInterval
+        let lastClose: Double
+        let lastHigh: Double
+        let lastLow: Double
+        let lastVolume: Double
+        let swingLength: Int
+        let invalidationWick: Bool
+        let maxZonesPerSide: Int
+        let showHistoric: Bool
+        let combine: Bool
+    }
+    private let vfobSlot = Slot<VFOBSig, VolumeFilteredOrderBlocks.Output>(.empty)
+
+    func volumeFilteredOrderBlocks(
+        candles: [Candle],
+        swingLength: Int,
+        invalidationWick: Bool,
+        maxZonesPerSide: Int,
+        showHistoric: Bool,
+        combine: Bool
+    ) -> VolumeFilteredOrderBlocks.Output {
+        let last = candles.last
+        let sig = VFOBSig(
+            count: candles.count,
+            firstTS: candles.first?.id.timeIntervalSince1970 ?? 0,
+            lastTS: last?.id.timeIntervalSince1970 ?? 0,
+            lastClose: last?.close ?? 0,
+            lastHigh: last?.high ?? 0,
+            lastLow: last?.low ?? 0,
+            lastVolume: last?.volume ?? 0,
+            swingLength: swingLength,
+            invalidationWick: invalidationWick,
+            maxZonesPerSide: maxZonesPerSide,
+            showHistoric: showHistoric,
+            combine: combine
+        )
+        return resolve(vfobSlot, signature: sig) {
+            VolumeFilteredOrderBlocks.compute(
+                candles,
+                swingLength: swingLength,
+                invalidationWick: invalidationWick,
+                maxZonesPerSide: maxZonesPerSide,
+                showHistoric: showHistoric,
+                combine: combine
+            )
+        }
+    }
+
     // ── Volume Profile ─────────────────────────────────────────────────
 
+    /// Includes the trailing bar's timestamp/close/volume so the 1 Hz
+    /// live tick (which rewrites the last bar in place, leaving `count`
+    /// unchanged) still invalidates the cache — otherwise the profile
+    /// freezes for the whole live session.
     private struct VPSig: Equatable {
         let count: Int
         let firstTS: TimeInterval
+        let lastTS: TimeInterval
+        let lastClose: Double
+        let lastVolume: Double
         let bucketCount: Int
         let valueAreaPct: Double
     }
     private let vpSlot = Slot<VPSig, [VolumeProfile.SessionVP]>([])
 
     func volumeProfile(candles: [Candle], bucketCount: Int, valueAreaPct: Double) -> [VolumeProfile.SessionVP] {
+        let last = candles.last
         let sig = VPSig(
             count: candles.count,
             firstTS: candles.first?.id.timeIntervalSince1970 ?? 0,
+            lastTS: last?.id.timeIntervalSince1970 ?? 0,
+            lastClose: last?.close ?? 0,
+            lastVolume: last?.volume ?? 0,
             bucketCount: bucketCount,
             valueAreaPct: valueAreaPct
         )
@@ -519,6 +717,9 @@ final class ChartDerivedCache: ObservableObject {
     private struct ZigzagVPSig: Equatable {
         let count: Int
         let firstTS: TimeInterval
+        let lastTS: TimeInterval
+        let lastClose: Double
+        let lastVolume: Double
         let bucketCount: Int
         let valueAreaPct: Double
         let zzDepth: Int
@@ -533,9 +734,13 @@ final class ChartDerivedCache: ObservableObject {
         zzDepth: Int,
         zzMinChange: Double
     ) -> VolumeProfile.TrendVP? {
+        let last = candles.last
         let sig = ZigzagVPSig(
             count: candles.count,
             firstTS: candles.first?.id.timeIntervalSince1970 ?? 0,
+            lastTS: last?.id.timeIntervalSince1970 ?? 0,
+            lastClose: last?.close ?? 0,
+            lastVolume: last?.volume ?? 0,
             bucketCount: bucketCount,
             valueAreaPct: valueAreaPct,
             zzDepth: zzDepth,
@@ -548,6 +753,54 @@ final class ChartDerivedCache: ObservableObject {
                 valueAreaPct: valueAreaPct,
                 zigzagDepth: zzDepth,
                 zigzagMinChange: zzMinChange
+            )
+        }
+    }
+
+    // ── Visible-range Volume Profile (levels with volume) ──────────────
+
+    /// Unlike the other slots this one *does* depend on the visible
+    /// window — the bar range is part of the signature. The compute is
+    /// O(visible bars), so a recompute per pan frame stays cheap.
+    private struct VisibleRangeVPSig: Equatable {
+        let count: Int
+        let startBar: Int
+        let endBar: Int
+        let lastTS: TimeInterval
+        let lastClose: Double
+        let lastVolume: Double
+        let bucketCount: Int
+        let valueAreaPct: Double
+        let levelCount: Int
+    }
+    private let visibleRangeVPSlot = Slot<VisibleRangeVPSig, VolumeProfile.VisibleRangeVP?>(nil)
+
+    func visibleRangeVolumeProfile(
+        candles: [Candle],
+        barRange: ClosedRange<Int>,
+        bucketCount: Int,
+        valueAreaPct: Double,
+        levelCount: Int
+    ) -> VolumeProfile.VisibleRangeVP? {
+        let last = candles.last
+        let sig = VisibleRangeVPSig(
+            count: candles.count,
+            startBar: barRange.lowerBound,
+            endBar: barRange.upperBound,
+            lastTS: last?.id.timeIntervalSince1970 ?? 0,
+            lastClose: last?.close ?? 0,
+            lastVolume: last?.volume ?? 0,
+            bucketCount: bucketCount,
+            valueAreaPct: valueAreaPct,
+            levelCount: levelCount
+        )
+        return resolve(visibleRangeVPSlot, signature: sig) {
+            VolumeProfile.computeVisibleRange(
+                candles,
+                barRange: barRange,
+                bucketCount: bucketCount,
+                valueAreaPct: valueAreaPct,
+                levelCount: levelCount
             )
         }
     }
@@ -823,6 +1076,339 @@ final class ChartDerivedCache: ObservableObject {
         )
         return resolve(mtrSlot, signature: signature) {
             MTRSetup.compute(candles, configuration: strategyConfig)
+        }
+    }
+
+    // ── Overlay extremes (for autoYDomain) ────────────────────────────
+    //
+    // `ChartView.autoYDomain` scans every overlay zone array + indicator
+    // points to find the price extremes for the Y-axis range. In grid
+    // mode with 4 panes × 1 Hz ticks, this ~200-line loop runs 4× per
+    // second PER PANE. The overlay data rarely changes (only on AI
+    // analysis, trade edits, drawing adds) — yet the loop ran every
+    // frame because `autoYDomain` was an uncached computed property.
+    //
+    // This cache keys on candle structure + overlay array counts.
+    // During pan/zoom the signature is unchanged → synchronous cache
+    // hit. The candle-range scan (visible-window dependent, O(visible
+    // bars)) stays in `ChartView.autoYDomain` — only the expensive
+    // overlay+indicator scan is cached here.
+
+    /// All the data that feeds the overlay-extremes scan. Passed as a
+    /// single value so the cache signature can be computed cheaply.
+    struct OverlayData {
+        let candles: [Candle]
+        let indicatorInstances: [IndicatorInstance]
+        let indicatorConfig: OscillatorConfig
+        let indicators: Set<IndicatorKind>
+        let srLevels: PromptBuilder.SRLevels
+        let fvgZones: [PromptBuilder.FVGZone]
+        let supplyDemandZones: [PromptBuilder.SupplyDemandZone]
+        let indicatorFvgZones: [FairValueGap.Zone]
+        let orderBlockZones: [OrderBlocks.Zone]
+        let steroidOrderBlockZones: [SteroidOrderBlocks.Zone]
+        let sonarlabOBZones: [SonarlabOrderBlocks.Zone]
+        let ichimokuOutput: Ichimoku.Output
+        let ichimokuOBZones: [IchimokuOrderBlocks.Zone]
+        let rankedOBZones: [RankedOrderBlocks.Zone]
+        let volumeFilteredOBZones: [VolumeFilteredOrderBlocks.Zone]
+        let chochZones: [ChangeOfCharacter.Zone]
+        let htfChochZones: [ChangeOfCharacter.DatedZone]
+        let sessionRuns: [TradingSessions.SessionRun]
+        let nySetupResults: [NYOpenSetup.Result]
+        let sp2lResults: [SP2LSetup.Result]
+        let pinBarComboResults: [PinBarComboSetup.Result]
+        let microMapResults: [MicroMapSetup.Result]
+        let mtrResults: [MTRSetup.Result]
+        let volumeProfileSessions: [VolumeProfile.SessionVP]
+        let zigzagTrendVP: VolumeProfile.TrendVP?
+        let visibleRangeVP: VolumeProfile.VisibleRangeVP?
+        let zigzagPivots: [ZigZag.Pivot]
+        let taScenario: PromptBuilder.TAScenario?
+        let taAltScenario: PromptBuilder.TAScenario?
+        let drawings: [ChartDrawing]
+        let trades: [Trade]
+        let journalEntries: [JournalEntry]
+    }
+
+    private struct OverlayExtremesSig: Equatable {
+        let count: Int
+        let firstTS: TimeInterval
+        let indicatorHiddenStates: [Bool]
+        let utOn: Bool
+        let srSupportCount: Int
+        let srResistanceCount: Int
+        let fvgCount: Int
+        let sdCount: Int
+        let ifvgCount: Int
+        let obCount: Int
+        let sobCount: Int
+        let sonarlabCount: Int
+        let ichimokuLineCount: Int
+        let ichimokuOBCount: Int
+        let rankedOBCount: Int
+        let volumeFilteredOBCount: Int
+        let chochCount: Int
+        let htfChochCount: Int
+        let sessionCount: Int
+        let nySetupCount: Int
+        let sp2lCount: Int
+        let pinBarCount: Int
+        let microMapCount: Int
+        let mtrCount: Int
+        let vpSessionCount: Int
+        let zigzagVPBuckets: Int
+        let visibleRangeVPBuckets: Int
+        let zigzagPivotCount: Int
+        let scenarioOn: Bool
+        let altScenarioOn: Bool
+        let drawingCount: Int
+        let tradeCount: Int
+        let journalCount: Int
+    }
+    private let overlayExtremesSlot = Slot<OverlayExtremesSig, (lo: Double, hi: Double)>(
+        (Double.greatestFiniteMagnitude, -Double.greatestFiniteMagnitude)
+    )
+
+    /// Cached overlay+indicator price extremes (excludes candle OHLC).
+    /// Call from `ChartView.autoYDomain` — the candle-range scan stays
+    /// there since it depends on the visible window.
+    func overlayExtremes(_ data: OverlayData) -> (lo: Double, hi: Double) {
+        let sig = OverlayExtremesSig(
+            count: data.candles.count,
+            firstTS: data.candles.first?.id.timeIntervalSince1970 ?? 0,
+            indicatorHiddenStates: data.indicatorInstances.map(\.hidden),
+            utOn: data.indicators.contains(.utBot),
+            srSupportCount: data.srLevels.support.count,
+            srResistanceCount: data.srLevels.resistance.count,
+            fvgCount: data.fvgZones.count,
+            sdCount: data.supplyDemandZones.count,
+            ifvgCount: data.indicatorFvgZones.count,
+            obCount: data.orderBlockZones.count,
+            sobCount: data.steroidOrderBlockZones.count,
+            sonarlabCount: data.sonarlabOBZones.count,
+            ichimokuLineCount: data.ichimokuOutput.kijun.count,
+            ichimokuOBCount: data.ichimokuOBZones.count,
+            rankedOBCount: data.rankedOBZones.count,
+            volumeFilteredOBCount: data.volumeFilteredOBZones.count,
+            chochCount: data.chochZones.count,
+            htfChochCount: data.htfChochZones.count,
+            sessionCount: data.sessionRuns.count,
+            nySetupCount: data.nySetupResults.count,
+            sp2lCount: data.sp2lResults.count,
+            pinBarCount: data.pinBarComboResults.count,
+            microMapCount: data.microMapResults.count,
+            mtrCount: data.mtrResults.count,
+            vpSessionCount: data.volumeProfileSessions.count,
+            zigzagVPBuckets: data.zigzagTrendVP?.buckets.count ?? 0,
+            visibleRangeVPBuckets: data.visibleRangeVP?.buckets.count ?? 0,
+            zigzagPivotCount: data.zigzagPivots.count,
+            scenarioOn: data.taScenario != nil,
+            altScenarioOn: data.taAltScenario != nil,
+            drawingCount: data.drawings.count,
+            tradeCount: data.trades.count,
+            journalCount: data.journalEntries.count
+        )
+        return resolve(overlayExtremesSlot, signature: sig) {
+            var lo = Double.greatestFiniteMagnitude
+            var hi = -Double.greatestFiniteMagnitude
+            let candles = data.candles
+
+            // Indicator points — from the already-memoized indicator cache
+            if !data.indicatorInstances.isEmpty {
+                let computed = Indicators.compute(instances: data.indicatorInstances, candles: candles)
+                for entry in computed {
+                    for p in entry.points {
+                        if p.value < lo { lo = p.value }
+                        if p.value > hi { hi = p.value }
+                    }
+                }
+            }
+            // UT Bot trailing stop
+            if data.indicators.contains(.utBot) {
+                let output = UTBot.compute(
+                    candles,
+                    keyValue: data.indicatorConfig.utKeyValue,
+                    atrPeriod: data.indicatorConfig.utATRPeriod,
+                    useHeikinAshi: data.indicatorConfig.utUseHeikinAshi
+                )
+                for v in output.trailingStop.compactMap({ $0 }) {
+                    if v < lo { lo = v }
+                    if v > hi { hi = v }
+                }
+            }
+            // Zone arrays — inline scans, no allocations
+            for level in data.srLevels.support {
+                if level < lo { lo = level }
+                if level > hi { hi = level }
+            }
+            for level in data.srLevels.resistance {
+                if level < lo { lo = level }
+                if level > hi { hi = level }
+            }
+            for zone in data.fvgZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for zone in data.supplyDemandZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for zone in data.indicatorFvgZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for zone in data.orderBlockZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for zone in data.steroidOrderBlockZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for zone in data.sonarlabOBZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for zone in data.ichimokuOBZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for zone in data.rankedOBZones {
+                if zone.bottom < lo { lo = zone.bottom }
+                if zone.top > hi { hi = zone.top }
+            }
+            for zone in data.volumeFilteredOBZones {
+                if zone.bottom < lo { lo = zone.bottom }
+                if zone.top > hi { hi = zone.top }
+            }
+            // Ichimoku lines — Span B (widest window) and Kijun bound the
+            // system; scanning both spans covers the cloud extremes too.
+            let ichi = data.ichimokuOutput
+            for p in ichi.senkouA { if p.value < lo { lo = p.value }; if p.value > hi { hi = p.value } }
+            for p in ichi.senkouB { if p.value < lo { lo = p.value }; if p.value > hi { hi = p.value } }
+            for p in ichi.tenkan { if p.value < lo { lo = p.value }; if p.value > hi { hi = p.value } }
+            for p in ichi.kijun { if p.value < lo { lo = p.value }; if p.value > hi { hi = p.value } }
+            for zone in data.chochZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for zone in data.htfChochZones {
+                if zone.low < lo { lo = zone.low }
+                if zone.high > hi { hi = zone.high }
+            }
+            for run in data.sessionRuns {
+                if run.low < lo { lo = run.low }
+                if run.high > hi { hi = run.high }
+            }
+            for r in data.nySetupResults {
+                if r.orLow < lo { lo = r.orLow }
+                if r.orHigh > hi { hi = r.orHigh }
+            }
+            for r in data.sp2lResults {
+                for v in [
+                    r.brokenLevel, r.spikeLow, r.spikeHigh,
+                    r.entry, r.stopLoss,
+                ] + r.takeProfits(count: data.indicatorConfig.sp2lTargetCount) {
+                    if v < lo { lo = v }
+                    if v > hi { hi = v }
+                }
+            }
+            for result in data.pinBarComboResults {
+                for value in [
+                    result.level, result.pinBarLow, result.pinBarHigh,
+                    result.entry, result.stopLoss, result.takeProfit
+                ] {
+                    if value < lo { lo = value }
+                    if value > hi { hi = value }
+                }
+            }
+            for result in data.microMapResults {
+                if result.spikeLow < lo { lo = result.spikeLow }
+                if result.spikeHigh > hi { hi = result.spikeHigh }
+                for attempt in result.attempts {
+                    for value in [attempt.entry, attempt.stopLoss, attempt.takeProfit].compactMap({ $0 }) {
+                        if value < lo { lo = value }
+                        if value > hi { hi = value }
+                    }
+                }
+            }
+            for result in data.mtrResults {
+                let channelBars = result.channelEndIndex - result.channelStartIndex
+                let channelSlope = channelBars == 0 ? 0 :
+                    (result.channelEndPrice - result.channelStartPrice) / Double(channelBars)
+                let projectedMain = result.channelStartPrice
+                    + channelSlope * Double(result.breakoutIndex - result.channelStartIndex)
+                let projectedParallel = projectedMain
+                    + (result.parallelStartPrice - result.channelStartPrice)
+                var values = [
+                    result.channelStartPrice, result.channelEndPrice,
+                    result.parallelStartPrice, result.parallelEndPrice,
+                    projectedMain, projectedParallel,
+                    result.trendExtremePrice, result.retestPrice, result.neckline
+                ]
+                values += [result.entry, result.stopLoss, result.takeProfit].compactMap { $0 }
+                for value in values {
+                    if value < lo { lo = value }
+                    if value > hi { hi = value }
+                }
+            }
+            for session in data.volumeProfileSessions {
+                for bucket in session.buckets {
+                    if bucket.priceLevel < lo { lo = bucket.priceLevel }
+                    if bucket.priceLevel > hi { hi = bucket.priceLevel }
+                }
+            }
+            if let vp = data.zigzagTrendVP {
+                for bucket in vp.buckets {
+                    if bucket.priceLevel < lo { lo = bucket.priceLevel }
+                    if bucket.priceLevel > hi { hi = bucket.priceLevel }
+                }
+            }
+            if let vp = data.visibleRangeVP {
+                for bucket in vp.buckets {
+                    if bucket.priceLevel < lo { lo = bucket.priceLevel }
+                    if bucket.priceLevel > hi { hi = bucket.priceLevel }
+                }
+            }
+            for pivot in data.zigzagPivots {
+                if pivot.price < lo { lo = pivot.price }
+                if pivot.price > hi { hi = pivot.price }
+            }
+            if let scenario = data.taScenario {
+                for v in [scenario.takeProfit, scenario.stopLoss] + [scenario.entry].compactMap({ $0 }) {
+                    if v < lo { lo = v }
+                    if v > hi { hi = v }
+                }
+            }
+            if let alt = data.taAltScenario {
+                for v in [alt.takeProfit, alt.stopLoss] + [alt.entry].compactMap({ $0 }) {
+                    if v < lo { lo = v }
+                    if v > hi { hi = v }
+                }
+            }
+            for d in data.drawings where d.visible {
+                if d.start.price < lo { lo = d.start.price }
+                if d.start.price > hi { hi = d.start.price }
+                if let e = d.end {
+                    if e.price < lo { lo = e.price }
+                    if e.price > hi { hi = e.price }
+                }
+            }
+            for t in data.trades {
+                for v in [t.entry, t.takeProfit, t.stopLoss, t.fillPrice ?? t.entry] {
+                    if v < lo { lo = v }
+                    if v > hi { hi = v }
+                }
+            }
+            for je in data.journalEntries {
+                for v in [je.entry, je.takeProfit, je.stopLoss].compactMap({ $0 }) {
+                    if v < lo { lo = v }
+                    if v > hi { hi = v }
+                }
+            }
+            guard lo != Double.greatestFiniteMagnitude else { return (0, 1) }
+            return (lo, hi)
         }
     }
 

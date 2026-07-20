@@ -14,6 +14,13 @@ import Combine
 struct ChartPaneView: View {
     @EnvironmentObject private var app: AppState
     @EnvironmentObject private var yahoo: YahooScheduler
+    /// Shared economic-calendar feed — the grid panes plot the same
+    /// news flags as the primary chart (see `NewsChartLayer`).
+    @EnvironmentObject private var news: NewsStore
+
+    /// News-flag layer toggle — the same `dashboard.showNews` key the
+    /// primary chart uses, so hiding news there hides it in every pane.
+    @AppStorage("dashboard.showNews") private var showNews: Bool = true
 
     let pane: ChartPane
     /// Indicator-parameter config (RSI period, UT Bot key value, etc.)
@@ -51,6 +58,10 @@ struct ChartPaneView: View {
     /// drawing picker and the pane's gesture handler share the same
     /// state. (Grid fullscreen drawing fix.)
     @Binding var fullscreenDrawingTool: DrawingTool
+    /// Fired on any click inside the pane — the parent (ChartGridView)
+    /// uses it to make this pane the sidebar's symbol-change target
+    /// (`MultiChartLayoutStore.focusedPaneID`) while `syncSymbol` is off.
+    var onFocus: () -> Void = {}
     let onUpdate: (ChartPane) -> Void
 
     @State private var candles: [Candle] = []
@@ -62,6 +73,13 @@ struct ChartPaneView: View {
     /// of to the whole dashboard.
     @State private var activeDrawingTool: DrawingTool = .none
     @State private var selectedDrawingID: UUID?
+    /// Whether the chart-corner indicator legend is expanded. Mirrors
+    /// `DashboardView.indicatorLegendExpanded` but scoped per pane.
+    @State private var indicatorLegendExpanded: Bool = true
+    /// Which indicator/oscillator instance (if any) has its floating
+    /// settings panel open. Mirrors DashboardView's editing-ID pattern.
+    @State private var editingIndicatorID: UUID?
+    @State private var editingOscillatorID: UUID?
 
     /// The active drawing tool — reads from the external binding when
     /// fullscreen (so the fullscreen toolbar works), falls back to the
@@ -80,6 +98,10 @@ struct ChartPaneView: View {
 
     var body: some View {
         content
+            // Focus-on-click: simultaneous so it never steals the event
+            // from the chart's own pan/draw gestures or header buttons —
+            // any interaction anywhere in the pane marks it focused.
+            .simultaneousGesture(TapGesture().onEnded { onFocus() })
             .task(id: "\(pane.pairID)|\(pane.timeframe.rawValue)") {
                 guard isVisible else { return }
                 await load()
@@ -143,36 +165,11 @@ struct ChartPaneView: View {
                         accent: pair.color,
                         xDomain: $xDomain,
                         yDomain: $yDomain,
-                        indicators: Set(pane.indicatorInstances.map(\.kind)),
+                        indicators: Set(visibleIndicatorInstances.map(\.kind)),
                         indicatorConfig: indicatorConfig,
                         drawings: drawingStore.drawings(for: pane.pairID),
                         activeTool: effectiveDrawingTool,
-                        onCommitDrawing: { drawing in
-                            drawingStore.add(drawing, for: pane.pairID)
-                            setDrawingTool(.none)
-                            selectedDrawingID = drawing.id
-                        },
-                        onMoveDrawing: { drawing in
-                            drawingStore.update(drawing, for: pane.pairID)
-                        },
-                        selectedDrawingID: selectedDrawingID,
-                        onSelectDrawing: { id in
-                            selectedDrawingID = id
-                        },
-                        livePrice: yahoo.latestPrices[pane.pairID]
-                    )
-                    #else
-                    ChartView(
-                        candles: candles,
-                        chartType: pane.chartType,
-                        accent: pair.color,
-                        xDomain: $xDomain,
-                        yDomain: $yDomain,
-                        indicators: Set(pane.indicatorInstances.map(\.kind)),
-                        indicatorConfig: indicatorConfig,
-                        indicatorInstances: pane.indicatorInstances,
-                        drawings: drawingStore.drawings(for: pane.pairID),
-                        activeTool: effectiveDrawingTool,
+                        contractSpec: .forPair(id: pane.pairID),
                         onCommitDrawing: { drawing in
                             drawingStore.add(drawing, for: pane.pairID)
                             setDrawingTool(.none)
@@ -186,13 +183,101 @@ struct ChartPaneView: View {
                             selectedDrawingID = id
                         },
                         livePrice: yahoo.latestPrices[pane.pairID],
-                        showHoverTooltip: isFullscreen
+                        newsEvents: showNews ? news.chartEvents : [],
+                        newsTimeZone: news.effectiveTimeZone
                     )
+                    #else
+                    ChartView(
+                        candles: candles,
+                        chartType: pane.chartType,
+                        accent: pair.color,
+                        xDomain: $xDomain,
+                        yDomain: $yDomain,
+                        indicators: Set(visibleIndicatorInstances.map(\.kind)),
+                        indicatorConfig: indicatorConfig,
+                        indicatorInstances: visibleIndicatorInstances,
+                        drawings: drawingStore.drawings(for: pane.pairID),
+                        activeTool: effectiveDrawingTool,
+                        contractSpec: .forPair(id: pane.pairID),
+                        onCommitDrawing: { drawing in
+                            drawingStore.add(drawing, for: pane.pairID)
+                            setDrawingTool(.none)
+                            selectedDrawingID = drawing.id
+                        },
+                        onMoveDrawing: { drawing in
+                            drawingStore.update(drawing, for: pane.pairID)
+                        },
+                        selectedDrawingID: selectedDrawingID,
+                        onSelectDrawing: { id in
+                            selectedDrawingID = id
+                        },
+                        livePrice: yahoo.latestPrices[pane.pairID],
+                        showHoverTooltip: isFullscreen,
+                        newsEvents: showNews ? news.chartEvents : [],
+                        newsTimeZone: news.effectiveTimeZone
+                    )
+                    // Skip re-laying-out the price chart when a parent
+                    // re-render (a live tick, a sibling pane, an unrelated
+                    // yahoo @Published change) didn't actually move any of
+                    // this chart's drawn inputs — the core grid-lag fix.
+                    // See `ChartView`'s Equatable note.
+                    .equatable()
+                    // Mouse-wheel / two-finger trackpad scroll zooms this
+                    // pane, anchored on the cursor's X position — same
+                    // modifier the primary single chart uses (the pinch
+                    // gesture lives inside ChartView; wheel events need
+                    // this AppKit monitor). Attached before `.clipped()`
+                    // below so the modifier's GeometryReader sees the
+                    // chart's actual frame in global coords.
+                    .scrollZoom(xDomain: $xDomain, totalCandles: candles.count)
                     #endif
                 }
                 chartContent
                     .frame(minHeight: isCompact ? 130 : 200, maxHeight: .infinity)
                     .clipped()
+                // TradingView-style indicator legend — top-left of the
+                // chart. Lists every indicator/oscillator on this pane
+                // with a hide/show (eye) toggle and a settings (gear)
+                // button. Mirrors `DashboardView.indicatorLegendOverlay`
+                // but scoped to this pane. Applied after `.clipped()` so
+                // it floats freely over the plot area.
+                .overlay(alignment: .topLeading) {
+                    indicatorLegendOverlay
+                        .padding(.top, 6)
+                        .padding(.leading, 8)
+                }
+                // Floating per-instance settings panels, opened by the
+                // legend's gear buttons.
+                .overlay(alignment: .topLeading) {
+                    if let id = editingIndicatorID,
+                       let idx = pane.indicatorInstances.firstIndex(where: { $0.id == id }) {
+                        IndicatorSettingsPanel(
+                            instance: Binding(
+                                get: { pane.indicatorInstances[idx] },
+                                set: { updateIndicatorInstance($0) }
+                            ),
+                            onUpdate: { updateIndicatorInstance($0) },
+                            onClose: { editingIndicatorID = nil }
+                        )
+                        .padding(.leading, Theme.Spacing.md)
+                        .padding(.top, Theme.Spacing.md)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let id = editingOscillatorID,
+                       let idx = pane.oscillatorInstances.firstIndex(where: { $0.id == id }) {
+                        OscillatorSettingsPanel(
+                            instance: Binding(
+                                get: { pane.oscillatorInstances[idx] },
+                                set: { updateOscillatorInstance($0) }
+                            ),
+                            onUpdate: { updateOscillatorInstance($0) },
+                            onClose: { editingOscillatorID = nil }
+                        )
+                        .padding(.leading, Theme.Spacing.md)
+                        .padding(.top, Theme.Spacing.md)
+                    }
+                }
                 #if !os(iOS)
                 .drawingDeleteKey(selectedDrawingID: $selectedDrawingID, drawingStore: drawingStore, pairID: pane.pairID)
                 #endif
@@ -220,10 +305,12 @@ struct ChartPaneView: View {
 
                 if pane.showVolume {
                     VolumeBarsView(candles: candles, accent: pair.color, xDomain: xDomain)
+                        .equatable()
                         .frame(height: isCompact ? 28 : 36)
                 }
-                ForEach(pane.oscillatorInstances) { inst in
+                ForEach(visibleOscillatorInstances) { inst in
                     OscillatorPanel(instance: inst, candles: candles, xDomain: xDomain)
+                        .equatable()
                         .frame(height: isCompact ? 56 : 80)
                 }
             } else {
@@ -339,6 +426,179 @@ struct ChartPaneView: View {
             .equatable()
     }
 
+    // ── Indicator legend (top-left overlay) ───────────────────────────
+    //
+    // TradingView-style floating legend listing every indicator /
+    // oscillator on this pane, each with a hide/show (eye) toggle and a
+    // settings (gear) button. Mirrors `DashboardView`'s
+    // `indicatorLegendOverlay` / `legendInstanceRow` / `legendOscillatorRow`
+    // but scoped to this pane's `ChartPane` (edits flow back via `onUpdate`).
+
+    /// Only the non-hidden indicators are drawn on the chart — hiding one
+    /// in the legend keeps it in the pane's config but removes its marks.
+    private var visibleIndicatorInstances: [IndicatorInstance] {
+        pane.indicatorInstances.filter { !$0.hidden }
+    }
+
+    /// Same for oscillator sub-panels.
+    private var visibleOscillatorInstances: [OscillatorInstance] {
+        pane.oscillatorInstances.filter { !$0.hidden }
+    }
+
+    @ViewBuilder
+    private var indicatorLegendOverlay: some View {
+        if !pane.indicatorInstances.isEmpty || !pane.oscillatorInstances.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Button {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        indicatorLegendExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        if indicatorLegendExpanded {
+                            Text("Indicators")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(Theme.Color.textMuted)
+                        }
+                        Image(systemName: indicatorLegendExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Theme.Color.textMuted)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Theme.Color.surface.opacity(0.85))
+                    )
+                }
+                .buttonStyle(.plain)
+
+                if indicatorLegendExpanded {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(pane.indicatorInstances) { inst in
+                            legendInstanceRow(for: inst)
+                        }
+                        ForEach(pane.oscillatorInstances) { inst in
+                            legendOscillatorRow(for: inst)
+                        }
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+    }
+
+    /// One legend row for an indicator: color swatch, label, eye toggle,
+    /// gear button.
+    private func legendInstanceRow(for inst: IndicatorInstance) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(inst.hidden ? inst.kind.color.opacity(0.35) : inst.kind.color)
+                .frame(width: 12, height: 3)
+
+            Text(inst.label)
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(inst.hidden ? inst.kind.color.opacity(0.35) : inst.kind.color)
+                .lineLimit(1)
+
+            Button {
+                toggleIndicatorHidden(id: inst.id)
+            } label: {
+                Image(systemName: inst.hidden ? "eye.slash" : "eye")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(inst.hidden ? Theme.Color.textMuted.opacity(0.4) : Theme.Color.textSecondary)
+                    .frame(width: 16, height: 16)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Color.surface.opacity(0.7)))
+            }
+            .buttonStyle(.plain)
+            .help(inst.hidden ? "Show \(inst.label)" : "Hide \(inst.label)")
+
+            Button {
+                editingOscillatorID = nil
+                editingIndicatorID = inst.id
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Theme.Color.textMuted)
+                    .frame(width: 16, height: 16)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Color.surface.opacity(0.7)))
+            }
+            .buttonStyle(.plain)
+            .help("Settings for \(inst.label)")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Theme.Color.surface.opacity(0.75)))
+    }
+
+    /// One legend row for an oscillator: gear button + label + eye toggle.
+    private func legendOscillatorRow(for inst: OscillatorInstance) -> some View {
+        HStack(spacing: 5) {
+            Button {
+                editingIndicatorID = nil
+                editingOscillatorID = inst.id
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Theme.Color.textMuted)
+                    .frame(width: 16, height: 16)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Color.surface.opacity(0.7)))
+            }
+            .buttonStyle(.plain)
+            .help("Settings for \(inst.label)")
+
+            Text(inst.label)
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(inst.hidden ? Color.white.opacity(0.3) : Color.white.opacity(0.6))
+                .lineLimit(1)
+
+            Button {
+                toggleOscillatorHidden(id: inst.id)
+            } label: {
+                Image(systemName: inst.hidden ? "eye.slash" : "eye")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(inst.hidden ? Theme.Color.textMuted.opacity(0.4) : Theme.Color.textSecondary)
+                    .frame(width: 16, height: 16)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Color.surface.opacity(0.7)))
+            }
+            .buttonStyle(.plain)
+            .help(inst.hidden ? "Show \(inst.label)" : "Hide \(inst.label)")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Theme.Color.surface.opacity(0.75)))
+    }
+
+    // ── Legend mutations (write back through onUpdate) ────────────────
+
+    private func toggleIndicatorHidden(id: UUID) {
+        guard let idx = pane.indicatorInstances.firstIndex(where: { $0.id == id }) else { return }
+        var updated = pane
+        updated.indicatorInstances[idx].hidden.toggle()
+        onUpdate(updated)
+    }
+
+    private func toggleOscillatorHidden(id: UUID) {
+        guard let idx = pane.oscillatorInstances.firstIndex(where: { $0.id == id }) else { return }
+        var updated = pane
+        updated.oscillatorInstances[idx].hidden.toggle()
+        onUpdate(updated)
+    }
+
+    private func updateIndicatorInstance(_ inst: IndicatorInstance) {
+        guard let idx = pane.indicatorInstances.firstIndex(where: { $0.id == inst.id }) else { return }
+        var updated = pane
+        updated.indicatorInstances[idx] = inst
+        onUpdate(updated)
+    }
+
+    private func updateOscillatorInstance(_ inst: OscillatorInstance) {
+        guard let idx = pane.oscillatorInstances.firstIndex(where: { $0.id == inst.id }) else { return }
+        var updated = pane
+        updated.oscillatorInstances[idx] = inst
+        onUpdate(updated)
+    }
+
     /// Right-click menu with every chart option that used to live in
     /// the always-visible header row: pair, timeframe, chart type,
     /// indicators/oscillators, volume, and fullscreen. Parameter
@@ -449,10 +709,7 @@ struct ChartPaneView: View {
         }
         Divider()
         Button {
-            // Drop the pinned window so the chart re-fits to the latest
-            // bars and auto-scales the price axis (same as a double-tap).
-            xDomain = nil
-            yDomain = nil
+            resetChart()
         } label: {
             Label("Reset Zoom", systemImage: "arrow.up.left.and.down.right.magnifyingglass")
         }
@@ -515,6 +772,12 @@ struct ChartPaneView: View {
         var merged = candles
         while let last = merged.last, last.bucketStart >= cutoff { merged.removeLast() }
         merged.append(contentsOf: recent)
+        // Only publish when the tail actually changed. A tick that
+        // re-reads the same trailing bar (common between real price
+        // updates) otherwise reassigns an identical array every second,
+        // forcing this pane — and its Equatable charts — to redraw for
+        // nothing. `!=` is O(n) but runs at most ~1 Hz off the hot path.
+        guard merged != candles else { return }
         candles = merged
     }
 
@@ -538,6 +801,18 @@ struct ChartPaneView: View {
         let lower = max(-0.5, upper - span)
         withAnimation(.easeInOut(duration: 0.25)) {
             xDomain = lower ... upper
+        }
+    }
+
+    /// Reset the pane to the default recent-bars window with the price
+    /// scale framed to the *candles* (not indicators/overlays). Mirrors
+    /// `DashboardView.resetChart()` so every Reset behaves the same.
+    private func resetChart() {
+        guard candles.count > 0 else { xDomain = nil; yDomain = nil; return }
+        let domain = ChartWindow.defaultDomain(count: candles.count)
+        yDomain = ChartWindow.candleYDomain(candles: candles, domain: domain)
+        withAnimation(.easeInOut(duration: 0.25)) {
+            xDomain = domain
         }
     }
 }

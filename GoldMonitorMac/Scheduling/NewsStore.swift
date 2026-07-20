@@ -131,6 +131,13 @@ final class NewsStore: ObservableObject {
     private var actualsCache: [String: (at: Date, map: [String: String])] = [:]
     private let actualsCacheTTL: TimeInterval = 90
 
+    /// How many surfaces currently want live news (the News tab while
+    /// visible, plus the chart's news layer while enabled). Auto-refresh
+    /// runs while this is > 0 so the News tab disappearing doesn't
+    /// starve the chart's flags — and the chart never spins the feed up
+    /// when nothing is watching. See `retainAutoRefresh`.
+    private var autoRefreshRetainCount = 0
+
     // MARK: - Public API
 
     /// Kick off a one-shot fetch immediately. Idempotent — repeated
@@ -138,6 +145,22 @@ final class NewsStore: ObservableObject {
     func refresh() {
         guard !isLoading else { return }
         Task { await fetchOnce() }
+    }
+
+    /// Register interest in live news. First retainer starts the
+    /// auto-refresh loops; balanced by `releaseAutoRefresh`. Use this
+    /// (not `startAutoRefresh` directly) from any surface that shares
+    /// the feed with others.
+    func retainAutoRefresh() {
+        autoRefreshRetainCount += 1
+        if autoRefreshRetainCount == 1 { startAutoRefresh() }
+    }
+
+    /// Drop interest in live news. Stops the loops once the last
+    /// retainer releases. Never drives the count below zero.
+    func releaseAutoRefresh() {
+        autoRefreshRetainCount = max(0, autoRefreshRetainCount - 1)
+        if autoRefreshRetainCount == 0 { stopAutoRefresh() }
     }
 
     /// Start auto-refreshing. Call when the News tab appears; the
@@ -210,6 +233,22 @@ final class NewsStore: ObservableObject {
                 case (let a?, let b?): return a < b
                 }
             }
+    }
+
+    /// Events for the on-chart news layer. Applies the same currency +
+    /// impact filters as the News tab (so the chart mirrors what the
+    /// user pared the calendar down to) but deliberately **skips the
+    /// single-day date filter** — the chart's visible window can span
+    /// several days, and it does its own bar-range clipping. Only
+    /// timed events (`eventAt != nil`) can be placed on the axis, so
+    /// "All Day" / "Tentative" rows are dropped here.
+    var chartEvents: [ForexFactoryEvent] {
+        let wantedCurrencies = currencyFilter
+        return events.filter { ev in
+            ev.eventAt != nil
+                && (wantedCurrencies.isEmpty || wantedCurrencies.contains(ev.currency))
+                && impactPasses(ev.impactLevel)
+        }
     }
 
     /// Currencies present in the current feed — drives the filter

@@ -80,9 +80,13 @@ struct ScrollZoomModifier: ViewModifier {
 
         guard globalFrame.contains(cursor) else { return false }
 
-        let dy = event.hasPreciseScrollingDeltas
+        var dy = event.hasPreciseScrollingDeltas
             ? event.scrollingDeltaY
             : event.deltaY * 10   // line-mode events report ~1 per click; scale up
+        // Some mice / scroll drivers emit line-mode events with a zero
+        // `deltaY` but a populated `scrollingDeltaY` — fall back so a
+        // physical wheel click always zooms.
+        if dy == 0 { dy = event.scrollingDeltaY }
         guard dy != 0 else { return false }
 
         applyZoom(dy: dy, cursor: cursor)

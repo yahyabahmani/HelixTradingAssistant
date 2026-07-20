@@ -57,6 +57,9 @@ struct DashboardViewiPad: View {
     @State private var activeDrawingTool: DrawingTool = .none
     @State private var selectedDrawingID: UUID? = nil
 
+    // Multi-chart grid (2-column layout)
+    @StateObject private var multiChart = MultiChartLayoutStore()
+
     // Phase 2: Sheets
     @State private var showLayersPopover: Bool = false
     @State private var showIndicatorSettings: Bool = false
@@ -147,12 +150,13 @@ struct DashboardViewiPad: View {
 
     var body: some View {
         let pair = app.pairs.first(where: { $0.id == app.selectedPairID })
+        let showsGrid = multiChart.layout != .single
 
         YahooDataBridge(
             livePrices: $livePrices,
             isFetching: $isFetching,
             dataResetToken: $dataResetToken
-        ) {
+        ) { yahoo in
         ZStack {
             VStack(spacing: 8) {
                 if let pair = pair {
@@ -162,11 +166,34 @@ struct DashboardViewiPad: View {
                     }
 
                     let isFull = app.isChartFullscreen
-                    chartCard(pair)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
+                    // Single chart and grid always mounted — inactive one
+                    // collapses to zero frame + zero opacity. Eliminates
+                    // teardown/rebuild cycle on layout switch.
+                    ZStack {
+                        chartCard(pair, yahoo: yahoo)
+                            .frame(maxWidth: showsGrid ? 0 : .infinity,
+                                   maxHeight: showsGrid ? 0 : .infinity)
+                            .opacity(showsGrid ? 0 : 1)
+                            .allowsHitTesting(!showsGrid)
+                        ChartGridView(
+                            layoutStore: multiChart,
+                            indicatorConfig: oscillatorConfig,
+                            drawingStore: drawingStore,
+                            activeDrawingTool: $activeDrawingTool
+                        ) {
+                            // Empty fullscreen toolbar — grid panes have
+                            // their own compact headers.
+                            EmptyView()
+                        }
+                        .frame(maxWidth: showsGrid ? .infinity : 0,
+                               maxHeight: showsGrid ? .infinity : 0)
+                        .opacity(showsGrid ? 1 : 0)
+                        .allowsHitTesting(showsGrid)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
 
-                    if !isFull {
+                    if !isFull && !showsGrid {
                         statsRow(pair)
                     }
                 } else {
@@ -226,6 +253,25 @@ struct DashboardViewiPad: View {
         }
         .onChange(of: userChartType) { _ in }
         .onChange(of: showVolume) { _ in }
+        // Grid: ensure pane count when layout changes
+        .onChange(of: multiChart.layout) { newLayout in
+            if newLayout != .single, let pairID = app.selectedPairID {
+                multiChart.ensurePaneCount(defaultPairID: pairID)
+            }
+        }
+        // Grid: sidebar symbol selection in grid mode
+        .onChange(of: app.selectedPairID) { newPairID in
+            guard let newPairID, multiChart.layout != .single else { return }
+            var updated = multiChart.panes
+            if multiChart.syncSymbol {
+                for i in updated.indices { updated[i].pairID = newPairID }
+            } else {
+                let targetID = multiChart.focusedPaneID ?? updated.first?.id
+                guard let idx = updated.firstIndex(where: { $0.id == targetID }) else { return }
+                updated[idx].pairID = newPairID
+            }
+            multiChart.panes = updated
+        }
         // Regular width (iPad): a non-modal, draggable panel lets the user
         // tune params while watching the chart update live. On compact
         // (iPhone) that floating panel is wider than the screen, so we
@@ -321,6 +367,35 @@ struct DashboardViewiPad: View {
                         .foregroundStyle(Theme.Color.textMuted)
                 }
             }
+
+            // Layout picker (single / 2 columns)
+            Menu {
+                Button {
+                    multiChart.layout = .single
+                } label: {
+                    Label("Single chart", systemImage: multiChart.layout == .single
+                          ? "checkmark.circle.fill" : "rectangle")
+                }
+                Button {
+                    if let pairID = app.selectedPairID {
+                        multiChart.setLayout(.twoColumn, defaultPairID: pairID)
+                    }
+                } label: {
+                    Label("2 columns", systemImage: multiChart.layout == .twoColumn
+                          ? "checkmark.circle.fill" : "rectangle.split.2x1")
+                }
+                if multiChart.layout != .single {
+                    Divider()
+                    Toggle("Sync symbol across panes", isOn: $multiChart.syncSymbol)
+                }
+            } label: {
+                Image(systemName: multiChart.layout == .single ? "rectangle" : "rectangle.split.2x1")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.Color.textSecondary)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Theme.Color.surface))
+            }
+
             Spacer()
 
             // Phase 2: Fetch timer
@@ -352,7 +427,7 @@ struct DashboardViewiPad: View {
 
     // MARK: - Chart card (Phase 2: + drawing toolbar + layers + alerts)
 
-    private func chartCard(_ pair: TradingPair) -> some View {
+    private func chartCard(_ pair: TradingPair, yahoo: YahooScheduler) -> some View {
         VStack(spacing: 0) {
             // Chart header
             IPadChartHeaderToolbar(
@@ -410,6 +485,7 @@ struct DashboardViewiPad: View {
                 taAltScenario: altScenarioVisible ? taAltScenario : nil,
                 drawings: app.selectedPairID.map { drawingStore.drawings(for: $0) } ?? [],
                 activeTool: activeDrawingTool,
+                contractSpec: .forPair(id: app.selectedPairID ?? ""),
                 onCommitDrawing: { drawing in
                     guard let pairID = app.selectedPairID else { return }
                     drawingStore.add(drawing, for: pairID)
@@ -428,7 +504,9 @@ struct DashboardViewiPad: View {
                 replayActive: replay.isActive,
                 showVolume: showVolume,
                 reloadToken: reloadToken,
-                candleCount: $candleCount
+                dataResetToken: dataResetToken,
+                candleCount: $candleCount,
+                yahoo: yahoo
             )
             .id("\(pair.id)|\(timeframe.rawValue)")
         }
@@ -533,6 +611,7 @@ private struct ChartPlotiPad: View {
     let taAltScenario: PromptBuilder.TAScenario?
     let drawings: [ChartDrawing]
     let activeTool: DrawingTool
+    let contractSpec: ContractSpec
     let onCommitDrawing: (ChartDrawing) -> Void
     let onMoveDrawing: (ChartDrawing) -> Void
     let selectedDrawingID: UUID?
@@ -543,11 +622,23 @@ private struct ChartPlotiPad: View {
     let replayActive: Bool
     let showVolume: Bool
     let reloadToken: Int
+    let dataResetToken: Int
     @Binding var candleCount: Int
 
     @EnvironmentObject private var app: AppState
-    @EnvironmentObject private var yahoo: YahooScheduler
+    /// Passed as a plain `let` (not `@EnvironmentObject`) so that
+    /// `@Published` writes on YahooScheduler (latestPrices, isFetching,
+    /// etc.) do NOT trigger body re-evaluation of this view. The parent
+    /// DashboardViewiPad already subscribes to the specific fields it
+    /// needs via YahooDataBridge — this view only reads the scheduler
+    /// in async tasks (warmHistory / refreshTrailingCandles).
+    let yahoo: YahooScheduler
+    /// Shared economic-calendar feed — powers the on-chart news flags.
+    @EnvironmentObject private var news: NewsStore
+    /// News-flag layer toggle (shared key with the Mac chart).
+    @AppStorage("dashboard.showNews") private var showNews: Bool = true
     @State private var candles: [Candle] = []
+    @State private var htfChochZones: [ChangeOfCharacter.DatedZone] = []
     @State private var xDomain: ClosedRange<Double>? = nil
     @State private var yDomain: ClosedRange<Double>? = nil
 
@@ -561,6 +652,7 @@ private struct ChartPlotiPad: View {
                 yDomain: $yDomain,
                 indicators: indicators,
                 indicatorConfig: indicatorConfig,
+                htfChochZones: htfChochZones,
                 srLevels: srLevels,
                 fvgZones: fvgZones,
                 supplyDemandZones: supplyDemandZones,
@@ -568,6 +660,7 @@ private struct ChartPlotiPad: View {
                 taAltScenario: taAltScenario,
                 drawings: drawings,
                 activeTool: activeTool,
+                contractSpec: contractSpec,
                 onCommitDrawing: onCommitDrawing,
                 onMoveDrawing: onMoveDrawing,
                 selectedDrawingID: selectedDrawingID,
@@ -575,17 +668,19 @@ private struct ChartPlotiPad: View {
                 trades: trades,
                 journalEntries: journalEntries,
                 livePrice: livePrice,
-                replayActive: replayActive
+                replayActive: replayActive,
+                newsEvents: showNews ? news.chartEvents : [],
+                newsTimeZone: news.effectiveTimeZone
             )
+            .equatable()
             .frame(maxHeight: .infinity)
             .clipped()
             // Tap-and-hold to rescale — mirrors the double-tap reset, but
-            // discoverable. Drops the pinned window so the chart re-fits to
-            // the latest bars and auto-scales the price axis.
+            // discoverable. Frames the recent bars with the price scale fit
+            // to the *candles* (not indicators/overlays).
             .contextMenu {
                 Button {
-                    xDomain = nil
-                    yDomain = nil
+                    resetChart()
                 } label: {
                     Label("Reset Zoom", systemImage: "arrow.up.left.and.down.right.magnifyingglass")
                 }
@@ -595,12 +690,15 @@ private struct ChartPlotiPad: View {
             // lockstep with the price chart.
             if !oscillators.isEmpty {
                 Divider().background(Theme.Color.border)
-                ForEach(Array(oscillators)) { kind in
+                // Sorted for stable ForEach ordering — Set iteration
+                // order is unstable, causing diff churn.
+                ForEach(Array(oscillators).sorted(by: { $0.rawValue < $1.rawValue })) { kind in
                     OscillatorPanel(
                         instance: Self.makeOscillatorInstance(kind: kind, config: indicatorConfig),
                         candles: candles,
                         xDomain: xDomain
                     )
+                    .equatable()
                     .padding(.horizontal, Theme.Spacing.lg)
                 }
             }
@@ -611,6 +709,7 @@ private struct ChartPlotiPad: View {
                 if volView.hasVolume {
                     Divider().background(Theme.Color.border)
                     volView
+                        .equatable()
                         .frame(height: 50)
                         .padding(.horizontal, Theme.Spacing.lg)
                 }
@@ -630,17 +729,93 @@ private struct ChartPlotiPad: View {
                 Task { await refreshTrailingCandles() }
             }
         }
-        .onChange(of: yahoo.dataResetToken) { _ in
+        .onChange(of: dataResetToken) { _ in
             Task { await reloadCandles() }
         }
+        // Recompute HTF CHoCH when the user toggles the CHoCH layer or edits
+        // any HTF-relevant setting (the candle `.task` id doesn't cover
+        // config-only changes).
+        .onChange(of: htfChochInputKey) { _ in
+            Task { await reloadHTFChoch() }
+        }
+    }
+
+    /// Compact signature of every input `reloadHTFChoch()` reads, so a
+    /// single `onChange` recomputes the overlay on any relevant edit.
+    private var htfChochInputKey: String {
+        [
+            String(indicators.contains(.changeOfCharacter)),
+            String(indicatorConfig.chochHTFEnabled),
+            indicatorConfig.chochHTFTimeframe,
+            String(indicatorConfig.chochHTFCount),
+            String(indicatorConfig.chochSwingLength),
+            String(indicatorConfig.chochMinSwingPct),
+            String(indicatorConfig.chochRequireFVG),
+            String(indicatorConfig.chochShowMitigated)
+        ].joined(separator: "|")
+    }
+
+    /// Reset to the default recent-bars window with the price scale
+    /// framed to the *candles* (not indicators/overlays), matching the
+    /// Mac chart's Reset and the chart's own double-tap.
+    private func resetChart() {
+        guard candles.count > 0 else { xDomain = nil; yDomain = nil; return }
+        let domain = ChartWindow.defaultDomain(count: candles.count)
+        yDomain = ChartWindow.candleYDomain(candles: candles, domain: domain)
+        xDomain = domain
     }
 
     // MARK: - Candle loading
 
     @MainActor
     private func reloadCandles() async {
-        candles = Self.loadCandles(pairID: pairID, tf: timeframe, app: app)
+        let loaded = Self.loadCandles(pairID: pairID, tf: timeframe, app: app)
+        // Skip state mutation when data is unchanged — avoids
+        // "Modifying state during view update" and unnecessary redraws.
+        guard loaded != candles else {
+            candleCount = loaded.count
+            return
+        }
+        candles = loaded
         candleCount = candles.count
+        await reloadHTFChoch()
+    }
+
+    /// Load the higher-timeframe CHoCH zones for the multi-timeframe
+    /// overlay. Reads the configured HTF candles for the current pair,
+    /// computes the last N zones, and re-anchors them to dates so
+    /// `ChartViewiPad` can project them onto the currently-displayed
+    /// (lower) timeframe. A no-op (clears the overlay) unless the CHoCH
+    /// indicator is visible, the HTF option is on, and the chosen HTF is
+    /// strictly coarser than the timeframe in view.
+    @MainActor
+    private func reloadHTFChoch() async {
+        let cfg = indicatorConfig
+        guard indicators.contains(.changeOfCharacter),
+              cfg.chochHTFEnabled,
+              let db = app.database,
+              let htf = Timeframe(rawValue: cfg.chochHTFTimeframe),
+              htf.seconds > timeframe.seconds
+        else {
+            if !htfChochZones.isEmpty { htfChochZones = [] }
+            return
+        }
+
+        let pair = app.pairs.first(where: { $0.id == pairID })
+        let respectsWeekend = pair?.category != .crypto
+        let htfCandles = await OHLCCandleLoader.loadAsync(
+            repo: db.ohlcRepo, pairID: pairID, tf: htf,
+            since: Date.distantPast, until: Date(),
+            dropClosedDays: respectsWeekend
+        )
+        htfChochZones = ChangeOfCharacter.datedZones(
+            htfCandles,
+            swingLength: cfg.chochSwingLength,
+            minSwingPct: cfg.chochMinSwingPct,
+            requireFVG: cfg.chochRequireFVG,
+            showMitigated: cfg.chochShowMitigated,
+            maxZones: max(1, cfg.chochHTFCount)
+        )
     }
 
     private func warmHistory() {
@@ -669,6 +844,10 @@ private struct ChartPlotiPad: View {
         var merged = candles
         while let last = merged.last, last.bucketStart >= cutoff { merged.removeLast() }
         merged.append(contentsOf: recent)
+        // Skip state mutation when the trailing splice is unchanged —
+        // avoids "Modifying state during view update" and unnecessary
+        // chart redraws on ticks that didn't produce a new bar.
+        guard merged != candles else { return }
         candles = merged
         candleCount = candles.count
     }
@@ -685,19 +864,24 @@ private struct ChartPlotiPad: View {
 
     /// Build an OscillatorInstance whose params reflect the current
     /// OscillatorConfig so the panel actually renders with the user's
-    /// chosen periods instead of hardcoded defaults.
+    /// chosen periods instead of hardcoded defaults. Uses a stable UUID
+    /// derived from the kind so OscillatorPanel's Equatable check works
+    /// across renders (avoids diff churn from fresh UUIDs each frame).
     private static func makeOscillatorInstance(kind: OscillatorKind, config: OscillatorConfig) -> OscillatorInstance {
+        let raw = kind.rawValue
+        let padded = raw.padding(toLength: 12, withPad: "0", startingAt: 0)
+        let stableID = UUID(uuidString: "00000000-0000-0000-0000-\(padded)") ?? UUID()
         switch kind {
         case .rsi:
-            return OscillatorInstance(kind: .rsi, params: ["period": .double(Double(config.rsiPeriod))])
+            return OscillatorInstance(id: stableID, kind: .rsi, params: ["period": .double(Double(config.rsiPeriod))])
         case .macd:
-            return OscillatorInstance(kind: .macd, params: [
+            return OscillatorInstance(id: stableID, kind: .macd, params: [
                 "fast":   .double(Double(config.macdFast)),
                 "slow":   .double(Double(config.macdSlow)),
                 "signal": .double(Double(config.macdSignal)),
             ])
         case .stochastic:
-            return OscillatorInstance(kind: .stochastic, params: [
+            return OscillatorInstance(id: stableID, kind: .stochastic, params: [
                 "k": .double(Double(config.stochK)),
                 "d": .double(Double(config.stochD)),
             ])
@@ -880,11 +1064,48 @@ private struct IndicatorSettingsBody: View {
             }
             Divider().background(Theme.Color.border)
             settingsSection(title: "Volume Profile") {
+                Picker("Mode", selection: $config.vpMode) {
+                    Text("Sessions (trading day)").tag("session")
+                    Text("ZigZag trend").tag("zigzag")
+                    Text("Visible range + levels").tag("visible")
+                }
+                .pickerStyle(.menu)
+                if config.vpMode == "visible" {
+                    settingsStepper(label: "Levels", value: $config.vpLevelCount, range: 1...10)
+                }
                 settingsStepper(label: "Buckets", value: $config.vpBucketCount, range: 10...100)
                 settingsDoubleStepper(label: "Value Area %", value: $config.vpValueAreaPct, range: 50...95, step: 5.0)
             }
+            Divider().background(Theme.Color.border)
+            settingsSection(title: "Volume-Filtered OB") {
+                robToggle("Show Historic Zones", $config.vfobShowHistoric)
+                robToggle("Volumetric Info", $config.vfobVolumetricInfo)
+                Picker("Zone Invalidation", selection: $config.vfobInvalidation) {
+                    Text("Wick").tag("Wick")
+                    Text("Close").tag("Close")
+                }
+                .pickerStyle(.menu)
+                .font(.system(size: 12))
+                settingsStepper(label: "Swing Length", value: $config.vfobSwingLength, range: 3...50)
+                Picker("Zone Count", selection: $config.vfobZoneCount) {
+                    Text("High").tag("High")
+                    Text("Medium").tag("Medium")
+                    Text("Low").tag("Low")
+                    Text("One").tag("One")
+                }
+                .pickerStyle(.menu)
+                .font(.system(size: 12))
+            }
         }
         .padding(14)
+    }
+
+    /// Compact switch row used by the Ranked-OB section.
+    private func robToggle(_ label: String, _ value: Binding<Bool>) -> some View {
+        Toggle(label, isOn: value)
+            .toggleStyle(.switch)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.Color.textSecondary)
     }
 
     @ViewBuilder
@@ -1391,7 +1612,7 @@ struct IPadIndicatorsPopover: View {
                     .foregroundStyle(Theme.Color.textMuted)
                     .textCase(.uppercase)
                 
-                ForEach(IndicatorKind.allCases.filter { $0 != .mtrStrategy }) { kind in
+                ForEach(IndicatorKind.allCases) { kind in
                     let isOn = enabledIndicators.contains(kind)
                     let isHidden = isOn && hiddenIndicators.contains(kind)
                     
@@ -1494,7 +1715,14 @@ struct IPadLayersPopover: View {
     @Binding var selectedDrawingID: UUID?
     let drawingStore: DrawingStore
     let selectedPairID: String?
-    
+
+    /// Shared economic-calendar feed + the news-flag layer toggle.
+    /// Read directly here (both are app-wide) so the toggle doesn't
+    /// have to thread through `IPadLayersMenu` / the toolbar's
+    /// Equatable structs.
+    @EnvironmentObject private var news: NewsStore
+    @AppStorage("dashboard.showNews") private var showNews: Bool = true
+
     private var enabledIndicators: Set<IndicatorKind> {
         Set(indicatorsRaw.split(separator: ",").compactMap { IndicatorKind(rawValue: String($0)) })
     }
@@ -1507,7 +1735,7 @@ struct IPadLayersPopover: View {
     private var hiddenOscillators: Set<OscillatorKind> {
         Set(hiddenOscillatorsRaw.split(separator: ",").compactMap { OscillatorKind(rawValue: String($0)) })
     }
-    
+
     private func setIndicatorHidden(_ kind: IndicatorKind, hidden: Bool) {
         var s = hiddenIndicators
         if hidden { s.insert(kind) } else { s.remove(kind) }
@@ -1518,7 +1746,7 @@ struct IPadLayersPopover: View {
         if hidden { s.insert(kind) } else { s.remove(kind) }
         hiddenOscillatorsRaw = s.map(\.rawValue).sorted().joined(separator: ",")
     }
-    
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -1526,10 +1754,20 @@ struct IPadLayersPopover: View {
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(Theme.Color.textPrimary)
                     .padding(.bottom, 4)
-                
+
+                // News — economic-calendar flags on the time axis.
+                if !news.chartEvents.isEmpty {
+                    Text("Chart")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.Color.textMuted)
+                        .textCase(.uppercase)
+                    toggleRow(label: "News · \(news.chartEvents.count)", isOn: $showNews)
+                    Divider().background(Theme.Color.border)
+                }
+
                 // Indicators
                 let activeIndicators = IndicatorKind.allCases.filter {
-                    $0 != .mtrStrategy && enabledIndicators.contains($0)
+                    enabledIndicators.contains($0)
                 }
                 if !activeIndicators.isEmpty {
                     Text("Indicators")

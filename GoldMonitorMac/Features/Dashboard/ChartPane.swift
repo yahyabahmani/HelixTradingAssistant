@@ -102,6 +102,14 @@ final class MultiChartLayoutStore: ObservableObject {
     /// toolbar controls to the pane's state. (Grid fullscreen toolbar
     /// binding fix.)
     @Published var fullscreenPaneID: UUID?
+    /// Which pane is the "active" target for the sidebar's symbol
+    /// selection while `syncSymbol` is off. Clicking a pane focuses it;
+    /// picking a symbol in the sidebar then changes that pane. Nil ⇒ fall
+    /// back to the first pane, so a sidebar pick always changes *something*
+    /// (the pre-focus bug was that a sidebar pick silently did nothing in
+    /// grid mode). In-memory only — focus is a transient UI concern, not
+    /// worth persisting.
+    @Published var focusedPaneID: UUID?
 
     private static let storageKey = "dashboard.multichart.v3"
     private static let sp2lDefaultsVersionKey = "dashboard.multichart.sp2lDefaults.version"

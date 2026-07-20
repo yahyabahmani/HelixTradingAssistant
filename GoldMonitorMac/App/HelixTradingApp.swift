@@ -78,6 +78,11 @@ struct HelixTradingApp: App {
                 .preferredColorScheme(.dark)
                 .task {
                     ProxyTransport.shared.configure(ProxyConfig.load())
+                    // Warm the economic calendar at boot so the chart's
+                    // news flags have data even before the News tab is
+                    // ever opened. One-shot; the News tab / chart layer
+                    // drive live refresh via retain/release.
+                    news.refresh()
                     // Wire dependencies on the engine once the
                     // surrounding @StateObjects exist. Both
                     // attaches are idempotent.

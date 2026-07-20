@@ -7,12 +7,17 @@ struct DashboardView: View {
     @EnvironmentObject private var app: AppState
     @EnvironmentObject private var yahoo: YahooScheduler
     @EnvironmentObject private var notificationInbox: NotificationInbox
+    @EnvironmentObject private var news: NewsStore
 
     // Persisted session state — every selection the user makes here gets
     // restored on relaunch.
     @AppStorage("dashboard.timeframe")  private var timeframe: Timeframe = .h1
     @AppStorage("dashboard.chartType")  private var userChartType: ChartType = .candle
     @AppStorage("dashboard.showVolume") private var showVolume: Bool = true
+    /// News-flag layer on the chart's time axis. On by default; toggled
+    /// from the Layers popover. Shared key with the grid panes so the
+    /// toggle governs every chart at once.
+    @AppStorage("dashboard.showNews")   private var showNews: Bool = true
     @AppStorage("notifications.strategySignals.enabled")
     private var strategyNotificationsEnabled: Bool = true
     /// Multi-instance indicator/oscillator storage — JSON-encoded arrays
@@ -1015,6 +1020,25 @@ struct DashboardView: View {
         case .sonarlabOrderBlock:
             if let v = p["sensitivity"]     { oscillatorConfig.sonarlabSensitivity = v.doubleValue }
             if let v = p["mitigationType"]  { oscillatorConfig.sonarlabMitigationType = v.stringValue }
+        case .rankedOrderBlock:
+            if let v = p["swingLength"]    { oscillatorConfig.robSwingLength = Int(v.doubleValue) }
+            if let v = p["zoneFrom"]       { oscillatorConfig.robZoneFrom = v.stringValue }
+            if let v = p["maxATRMult"]     { oscillatorConfig.robMaxATRMult = v.doubleValue }
+            if let v = p["atrLength"]      { oscillatorConfig.robATRLength = Int(v.doubleValue) }
+            if let v = p["invalidation"]   { oscillatorConfig.robInvalidation = v.stringValue }
+            if let v = p["zonesPerSide"]   { oscillatorConfig.robZonesPerSide = Int(v.doubleValue) }
+            if let v = p["showBreakers"]   { oscillatorConfig.robShowBreakers = v.boolValue }
+            if let v = p["combineZones"]   { oscillatorConfig.robCombineZones = v.boolValue }
+            if let v = p["mergeThreshold"] { oscillatorConfig.robMergeThreshold = v.doubleValue }
+            if let v = p["showLabels"]     { oscillatorConfig.robShowLabels = v.boolValue }
+            if let v = p["useVP"]          { oscillatorConfig.robUseVP = v.boolValue }
+            if let v = p["vpLookback"]     { oscillatorConfig.robVPLookback = Int(v.doubleValue) }
+            if let v = p["vpRows"]         { oscillatorConfig.robVPRows = Int(v.doubleValue) }
+            if let v = p["useIchimoku"]    { oscillatorConfig.robUseIchimoku = v.boolValue }
+            if let v = p["tenkanLength"]   { oscillatorConfig.robTenkanLength = Int(v.doubleValue) }
+            if let v = p["kijunLength"]    { oscillatorConfig.robKijunLength = Int(v.doubleValue) }
+            if let v = p["senkouBLength"]  { oscillatorConfig.robSenkouBLength = Int(v.doubleValue) }
+            if let v = p["displacement"]   { oscillatorConfig.robDisplacement = Int(v.doubleValue) }
         case .changeOfCharacter:
             if let v = p["swingLength"]   { oscillatorConfig.chochSwingLength = Int(v.doubleValue) }
             if let v = p["minSwingPct"]   { oscillatorConfig.chochMinSwingPct = v.doubleValue }
@@ -1030,10 +1054,37 @@ struct DashboardView: View {
         case .volumeProfile:
             if let v = p["bucketCount"]  { oscillatorConfig.vpBucketCount = Int(v.doubleValue) }
             if let v = p["valueAreaPct"] { oscillatorConfig.vpValueAreaPct = v.doubleValue }
-            if let v = p["useZigzag"]   { oscillatorConfig.vpUseZigzag = v.boolValue }
+            // Legacy param from before the mode picker — older saved
+            // instances still carry it; map it onto `vpMode`.
+            if let v = p["useZigzag"]   { oscillatorConfig.vpMode = v.boolValue ? "zigzag" : "session" }
+            if let v = p["mode"]        { oscillatorConfig.vpMode = v.stringValue }
+            if let v = p["levelCount"]  { oscillatorConfig.vpLevelCount = Int(v.doubleValue) }
             if let v = p["showZigzag"]  { oscillatorConfig.vpShowZigzag = v.boolValue }
             if let v = p["zzDepth"]     { oscillatorConfig.vpZZDepth = Int(v.doubleValue) }
             if let v = p["zzMinChange"] { oscillatorConfig.vpZZMinChange = v.doubleValue }
+        case .ichimoku:
+            if let v = p["tenkan"]       { oscillatorConfig.ichiTenkan = Int(v.doubleValue) }
+            if let v = p["kijun"]        { oscillatorConfig.ichiKijun = Int(v.doubleValue) }
+            if let v = p["senkouB"]      { oscillatorConfig.ichiSenkouB = Int(v.doubleValue) }
+            if let v = p["displacement"] { oscillatorConfig.ichiDisplacement = Int(v.doubleValue) }
+            if let v = p["showChikou"]   { oscillatorConfig.ichiShowChikou = v.boolValue }
+            if let v = p["showCloud"]    { oscillatorConfig.ichiShowCloud = v.boolValue }
+        case .ichimokuOrderBlock:
+            if let v = p["periods"]      { oscillatorConfig.iobPeriods = Int(v.doubleValue) }
+            if let v = p["threshold"]    { oscillatorConfig.iobThreshold = v.doubleValue }
+            if let v = p["useWicks"]     { oscillatorConfig.iobUseWicks = v.boolValue }
+            if let v = p["tenkan"]       { oscillatorConfig.iobTenkan = Int(v.doubleValue) }
+            if let v = p["kijun"]        { oscillatorConfig.iobKijun = Int(v.doubleValue) }
+            if let v = p["senkouB"]      { oscillatorConfig.iobSenkouB = Int(v.doubleValue) }
+            if let v = p["displacement"] { oscillatorConfig.iobDisplacement = Int(v.doubleValue) }
+            if let v = p["minScore"]     { oscillatorConfig.iobMinScore = Int(v.doubleValue) }
+            if let v = p["requireTrend"] { oscillatorConfig.iobRequireTrend = v.boolValue }
+        case .volumeFilteredOrderBlock:
+            if let v = p["showHistoric"]   { oscillatorConfig.vfobShowHistoric = v.boolValue }
+            if let v = p["volumetricInfo"] { oscillatorConfig.vfobVolumetricInfo = v.boolValue }
+            if let v = p["invalidation"]   { oscillatorConfig.vfobInvalidation = v.stringValue }
+            if let v = p["swingLength"]    { oscillatorConfig.vfobSwingLength = Int(v.doubleValue) }
+            if let v = p["zoneCount"]      { oscillatorConfig.vfobZoneCount = v.stringValue }
         default:
             break // SMA/EMA/Bollinger — read from indicatorInstances, no config sync needed
         }
@@ -1375,15 +1426,23 @@ struct DashboardView: View {
             guard let fsID,
                   let pane = multiChart.panes.first(where: { $0.id == fsID })
             else { return }
-            timeframe = pane.timeframe
-            userChartType = pane.chartType
-            indicatorInstances = pane.indicatorInstances
-            oscillatorInstances = pane.oscillatorInstances
-            showVolume = pane.showVolume
+            // Defer — 5 @AppStorage/@State mutations in one event.
+            // Each fires objectWillChange separately, causing cascading
+            // re-renders. Deferring coalesces them after the current
+            // view update cycle.
+            DispatchQueue.main.async {
+                self.timeframe = pane.timeframe
+                self.userChartType = pane.chartType
+                self.indicatorInstances = pane.indicatorInstances
+                self.oscillatorInstances = pane.oscillatorInstances
+                self.showVolume = pane.showVolume
+            }
         }
         // Cache totalVolume so the O(n) candle iteration only runs
         // when candles change, not on every pan/zoom frame.
-        .onChange(of: candles.count) { _ in recomputeTotalVolume() }
+        // Merged with refreshNYSetupScenario below — both fire on
+        // the same candles.count change.
+        // (see consolidated handler at candles.count below)
         // Infinite scroll: when the user pans within a few bars of the
         // oldest stored candle, pull an older page from Twelve Data
         // (Yahoo caps 1m/5m at ~8d/~60d) and splice it onto the front.
@@ -1391,6 +1450,7 @@ struct DashboardView: View {
         // `xDomain` by the same amount to keep the view visually still.
         .onChange(of: xDomain) { newValue in
             guard let dom = newValue, dom.lowerBound < 8 else { return }
+            guard !_loadingOlderFlag.isLoading else { return }
             guard let pairID = app.selectedPairID,
                   let cur = app.pairs.first(where: { $0.id == pairID }),
                   cur.usesLiveStream,            // only Twelve Data pairs have a REST history feed
@@ -1398,15 +1458,17 @@ struct DashboardView: View {
             else { return }
             let srcTF = sourceTimeframeTag(for: timeframe)
             guard srcTF == "1m" || srcTF == "5m" else { return }
+            _loadingOlderFlag.isLoading = true
             Task {
                 let added = await yahoo.loadOlderHistory(pairID: pairID, sourceTF: srcTF)
-                guard added > 0 else { return }
+                guard added > 0 else { _loadingOlderFlag.isLoading = false; return }
                 let prior = candles.count
                 await reloadCandles()
                 let shift = Double(candles.count - prior)
                 if shift > 0, let pinned = xDomain {
                     xDomain = (pinned.lowerBound + shift) ... (pinned.upperBound + shift)
                 }
+                _loadingOlderFlag.isLoading = false
             }
         }
         .sheet(isPresented: $showAlertSheet) {
@@ -1429,7 +1491,11 @@ struct DashboardView: View {
             // Persist on dismiss so the user's choice survives a relaunch
             // even if they close via clicking the backdrop / hitting Esc.
             oscillatorConfig.save()
-            settingsFocusSection = nil
+            // Defer to next run loop — this closure fires during the
+            // sheet dismissal animation, which is still within a view
+            // update cycle. Synchronous @State mutation here triggers
+            // "Modifying state during view update" warnings.
+            DispatchQueue.main.async { settingsFocusSection = nil }
         } content: {
             IndicatorSettingsSheet(config: $oscillatorConfig,
                                    focusSection: settingsFocusSection)
@@ -1496,33 +1562,54 @@ struct DashboardView: View {
         // intrabar last-bar updates (same count) don't re-detect — the
         // already-registered alerts fire on price touch via the tick
         // evaluator above.
-        .onChange(of: candles.count) { _ in refreshNYSetupScenario() }
+        // Consolidated: recomputeTotalVolume + refreshNYSetupScenario
+        // both fire on the same candles.count change. Deferred so the
+        // @State mutations land after the current view update cycle.
+        .onChange(of: candles.count) { _ in
+            DispatchQueue.main.async {
+                self.recomputeTotalVolume()
+                self.refreshNYSetupScenario()
+            }
+        }
         .onChange(of: candles.last?.id) { _ in
-            refreshMicroMapNotifications(seedOnly: false)
-            refreshSP2LNotifications(seedOnly: false)
-            refreshPinBarNotifications(seedOnly: false)
-            refreshMTRNotifications(seedOnly: false)
+            // Deferred — 4 refreshers each mutate @State properties.
+            // Running them after the current view update avoids the
+            // "Modifying state during view update" cascade.
+            DispatchQueue.main.async {
+                self.refreshMicroMapNotifications(seedOnly: false)
+                self.refreshSP2LNotifications(seedOnly: false)
+                self.refreshPinBarNotifications(seedOnly: false)
+                self.refreshMTRNotifications(seedOnly: false)
+            }
         }
         .onChange(of: indicatorInstances) { _ in
-            refreshNYSetupScenario()
-            refreshMicroMapNotifications(seedOnly: true)
-            refreshSP2LNotifications(seedOnly: true)
-            refreshPinBarNotifications(seedOnly: true)
-            refreshMTRNotifications(seedOnly: true)
+            DispatchQueue.main.async {
+                self.refreshNYSetupScenario()
+                self.refreshMicroMapNotifications(seedOnly: true)
+                self.refreshSP2LNotifications(seedOnly: true)
+                self.refreshPinBarNotifications(seedOnly: true)
+                self.refreshMTRNotifications(seedOnly: true)
+            }
         }
         .onChange(of: oscillatorConfig) { _ in
-            refreshNYSetupScenario()
-            syncConfigToOscillatorInstances()
-            refreshMicroMapNotifications(seedOnly: true)
-            refreshSP2LNotifications(seedOnly: true)
-            refreshPinBarNotifications(seedOnly: true)
-            refreshMTRNotifications(seedOnly: true)
+            // syncConfigToOscillatorInstances mutates oscillatorInstances
+            // (@State), so defer the entire block.
+            DispatchQueue.main.async {
+                self.refreshNYSetupScenario()
+                self.syncConfigToOscillatorInstances()
+                self.refreshMicroMapNotifications(seedOnly: true)
+                self.refreshSP2LNotifications(seedOnly: true)
+                self.refreshPinBarNotifications(seedOnly: true)
+                self.refreshMTRNotifications(seedOnly: true)
+            }
         }
         .onChange(of: strategyNotificationsEnabled) { enabled in
-            refreshMicroMapNotifications(seedOnly: enabled)
-            refreshSP2LNotifications(seedOnly: enabled)
-            refreshPinBarNotifications(seedOnly: enabled)
-            refreshMTRNotifications(seedOnly: enabled)
+            DispatchQueue.main.async {
+                self.refreshMicroMapNotifications(seedOnly: enabled)
+                self.refreshSP2LNotifications(seedOnly: enabled)
+                self.refreshPinBarNotifications(seedOnly: enabled)
+                self.refreshMTRNotifications(seedOnly: enabled)
+            }
         }
         // Activation sheet — driven by `pendingActivation` so the
         // analysis sheet can dismiss first and this one presents on
@@ -1775,6 +1862,7 @@ struct DashboardView: View {
                     taAltScenario: altScenarioVisible ? taAltScenario : nil,
                     drawings: drawingStore.drawings(for: pair.id),
                     activeTool: activeDrawingTool,
+                    contractSpec: .forPair(id: pair.id),
                     onCommitDrawing: { drawing in
                         drawingStore.add(drawing, for: pair.id)
                         // TradingView-style: after a successful draw,
@@ -1831,8 +1919,19 @@ struct DashboardView: View {
                         replay.setAnchor(candles[idx].bucketStart)
                         xDomain = nil   // refit to the revealed window
                         Task { await reloadCandles() }
-                    }
+                    },
+                    // Economic-calendar flags on the bottom axis
+                    // (TradingView-style). Mirrors the News tab's
+                    // currency/impact filters; hidden when the News
+                    // layer is toggled off.
+                    newsEvents: showNews ? news.chartEvents : [],
+                    newsTimeZone: news.effectiveTimeZone
                 )
+                // Absorb parent re-renders (live ticks, unrelated yahoo
+                // @Published churn) that didn't move any drawn input, so
+                // the single chart stops re-laying-out ~1×/sec for nothing.
+                // See `ChartView`'s Equatable note.
+                .equatable()
                 // Chart expands to consume any vertical space the
                 // siblings below (volume / oscillators / stats) don't
                 // claim — `minHeight` guards against the chart being
@@ -2033,6 +2132,7 @@ struct DashboardView: View {
                 candles: candles,
                 xDomain: xDomain
             )
+            .equatable()
             .padding(.trailing, Theme.Spacing.sm)
         }
     }
@@ -2335,6 +2435,7 @@ struct DashboardView: View {
     private var activeLayerCount: Int {
         var n = 0
         if showVolume { n += 1 }
+        if showNews && !news.chartEvents.isEmpty { n += 1 }
         n += enabledIndicatorKinds.count
         n += enabledOscillators.count
         if !srLevels.isEmpty { n += 1 }
@@ -2375,6 +2476,20 @@ struct DashboardView: View {
                     onToggle: { showVolume.toggle() },
                     onDelete: nil      // no trash — built-in option
                 )
+
+                // News — economic-calendar flags on the time axis.
+                // A chart-wide toggle like Volume; no trash (the feed
+                // is shared, not user-added). Shows the visible-event
+                // count so the user knows how many flags are on screen.
+                if !news.chartEvents.isEmpty {
+                    layerRow(
+                        title: "News · \(news.chartEvents.count)",
+                        swatch: Theme.Color.danger,
+                        visible: showNews,
+                        onToggle: { showNews.toggle() },
+                        onDelete: nil
+                    )
+                }
 
                 // Indicator overlays (SMA/EMA/Bollinger/UT Bot).
                 ForEach(IndicatorKind.allCases) { kind in
@@ -2627,6 +2742,10 @@ struct DashboardView: View {
             return "Rectangle"
         case .volumeProfile:
             return "Vol Profile"
+        case .longPosition:
+            return "Long · \(ChartView.priceShort(d.start.price))"
+        case .shortPosition:
+            return "Short · \(ChartView.priceShort(d.start.price))"
         }
     }
 
@@ -3147,6 +3266,11 @@ struct DashboardView: View {
     /// `candles` actually changes, not on every pan/zoom frame.
     /// (Pan/zoom performance fix.)
     @State private var cachedTotalVolume: Double? = nil
+    /// Class-box flag to prevent xDomain onChange re-entrancy when
+    /// infinite-scroll prepends bars and shifts the domain. Not
+    /// `@State` — avoids "Modifying state during view update".
+    private final class LoadingOlderFlag { var isLoading = false }
+    private let _loadingOlderFlag = LoadingOlderFlag()
     private func recomputeTotalVolume() {
         let vols = candles.compactMap { $0.volume }
         guard !vols.isEmpty else { cachedTotalVolume = nil; return }
@@ -3167,6 +3291,7 @@ struct DashboardView: View {
         let bars = VolumeBarsView(candles: candles, accent: pair.color, xDomain: xDomain)
         if showVolume && bars.hasVolume {
             bars
+                .equatable()
                 .frame(height: 70)
                 .padding(.trailing, Theme.Spacing.sm)
                 .clipped()
@@ -3270,32 +3395,16 @@ struct DashboardView: View {
     private func resetChart() {
         let n = candles.count
         guard n > 0 else { xDomain = nil; yDomain = nil; return }
-        let defaultBars: Double = 150
-        let upper = Double(n - 1) + 0.5
-        let lower = max(-0.5, upper - defaultBars)
-        // Compute an explicit Y fit for the reset window directly from the
-        // candle array. Setting a concrete non-nil value ensures Apple Charts
-        // registers a definite domain change and redraws the Y axis —
-        // transitioning from a pinned value through nil back to a computed
-        // value via the effectiveYDomain chain is unreliable on macOS 13.
-        let loIdx = max(0, Int(lower.rounded(.down)))
-        let hiIdx = min(n - 1, Int(upper.rounded(.up)))
-        let slice = candles[loIdx...hiIdx]
-        if let lo = slice.map(\.low).min(), let hi = slice.map(\.high).max() {
-            let span = max(hi - lo, hi * 0.001, 1.0)
-            let pad  = span * 0.05
-            yDomain = (lo - pad) ... (hi + pad)
-        } else {
-            yDomain = nil
-        }
+        let domain = ChartWindow.defaultDomain(count: n, visible: 150)
+        // Pin the price scale to the *candles* in the reset window and keep
+        // it there. Reverting to nil would hand the Y axis back to the
+        // overlay-inclusive auto-fit, which re-frames a far-away indicator /
+        // target line and squashes the price action — the exact thing Reset
+        // is meant to undo. An explicit non-nil value also guarantees Apple
+        // Charts registers a definite domain change and redraws on macOS 13.
+        yDomain = ChartWindow.candleYDomain(candles: candles, domain: domain)
         withAnimation(.easeInOut(duration: 0.3)) {
-            xDomain = lower ... upper
-        }
-        // Re-enable continuous Y auto-fit after the animation finishes, so
-        // the user can pan left and have the Y scale follow automatically.
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            yDomain = nil
+            xDomain = domain
         }
     }
 
@@ -3496,6 +3605,12 @@ struct DashboardView: View {
             dropClosedDays: respectsWeekend
         )
         let priorCount = candles.count
+        // Skip state mutation when data is unchanged — avoids
+        // "Modifying state during view update" and unnecessary redraws.
+        guard result != self.candles else {
+            isLoading = false
+            return
+        }
         self.candles = result
         recomputeTotalVolume()
         self.isLoading = false
@@ -3589,6 +3704,11 @@ struct DashboardView: View {
         var merged = candles
         while let last = merged.last, last.bucketStart >= cutoff { merged.removeLast() }
         merged.append(contentsOf: recent)
+        // Skip the whole downstream cascade (chart redraw, volume recompute,
+        // RSI / Order Block alert re-evaluation) when a tick re-read the
+        // same trailing bar and nothing changed. See the pane's
+        // `refreshTrailing` for the same guard.
+        guard merged != candles else { return }
         candles = merged
         recomputeTotalVolume()
         followLatestIfPinned(priorCount: priorCount, newCount: merged.count)

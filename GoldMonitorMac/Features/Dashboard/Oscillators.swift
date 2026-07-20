@@ -239,6 +239,29 @@ struct OscillatorConfig: Codable, Equatable {
     var sonarlabSensitivity: Double = 26.0
     var sonarlabMitigationType: String = "Close"
 
+    // Ranked Order Blocks parameters (see `RankedOrderBlocks`). Swing
+    // engine tuning up top; the two ranking legs (Volume Profile and
+    // Ichimoku) can each be switched out of the score independently,
+    // which changes the badge divisor (2, 3, or 5).
+    var robSwingLength: Int = 10
+    var robZoneFrom: String = "Wicks"
+    var robMaxATRMult: Double = 3.5
+    var robATRLength: Int = 10
+    var robInvalidation: String = "Wick"
+    var robZonesPerSide: Int = 3
+    var robShowBreakers: Bool = true
+    var robCombineZones: Bool = true
+    var robMergeThreshold: Double = 0.0
+    var robShowLabels: Bool = true
+    var robUseVP: Bool = true
+    var robVPLookback: Int = 200
+    var robVPRows: Int = 24
+    var robUseIchimoku: Bool = true
+    var robTenkanLength: Int = 9
+    var robKijunLength: Int = 26
+    var robSenkouBLength: Int = 52
+    var robDisplacement: Int = 26
+
     // Change of Character parameters (see `ChangeOfCharacter`).
     // `chochSwingLength` is the ZigZag pivot depth used to read structure;
     // `chochMinSwingPct` filters swing noise. `chochRequireFVG` restricts
@@ -259,18 +282,60 @@ struct OscillatorConfig: Codable, Equatable {
     var chochHTFTimeframe: String = "1h"
     var chochHTFCount: Int = 3
 
-    // Volume Profile parameters (session-based, see `VolumeProfile`).
-    // `vpBucketCount` is the number of equal-price bands per session;
-    // `vpValueAreaPct` is the % of total volume that defines the value area.
-    // ZigZag-based VP: `vpUseZigzag` enables last-trend-only mode,
-    // `vpShowZigzag` draws the zigzag lines on the chart,
-    // `vpZZDepth` / `vpZZMinChange` tune the zigzag sensitivity.
+    // Volume Profile parameters (see `VolumeProfile`).
+    // `vpMode` picks the profile: "session" (per trading day), "zigzag"
+    // (last ZigZag trend segment only) or "visible" (visible window +
+    // ranked high-volume levels). `vpBucketCount` is the number of
+    // equal-price bands; `vpValueAreaPct` is the % of total volume that
+    // defines the value area; `vpLevelCount` is how many high-volume
+    // levels visible mode extracts. `vpShowZigzag` draws the zigzag
+    // lines on the chart; `vpZZDepth` / `vpZZMinChange` tune the
+    // zigzag sensitivity.
     var vpBucketCount: Int = 24
     var vpValueAreaPct: Double = 70.0
-    var vpUseZigzag: Bool = true
+    var vpMode: String = "zigzag"
+    var vpLevelCount: Int = 5
     var vpShowZigzag: Bool = true
     var vpZZDepth: Int = 5
     var vpZZMinChange: Double = 1.0
+
+    // Ichimoku Kinkō Hyō parameters (see `Ichimoku`). The three midline
+    // periods plus the forward/backward displacement are the canonical
+    // 9 / 26 / 52 / 26. `ichiShowChikou` / `ichiShowCloud` toggle the
+    // lagging span and the Kumo fill.
+    var ichiTenkan: Int = 9
+    var ichiKijun: Int = 26
+    var ichiSenkouB: Int = 52
+    var ichiDisplacement: Int = 26
+    var ichiShowChikou: Bool = true
+    var ichiShowCloud: Bool = true
+
+    // Ichimoku-confluence Order Blocks (see `IchimokuOrderBlocks`). Reuses
+    // the base Order Block run-length / threshold / wick inputs, plus its
+    // own Ichimoku periods and the confluence gate (`iobMinScore`, and
+    // `iobRequireTrend` to insist on cloud-trend agreement).
+    var iobPeriods: Int = 5
+    var iobThreshold: Double = 0.0
+    var iobUseWicks: Bool = false
+    var iobTenkan: Int = 9
+    var iobKijun: Int = 26
+    var iobSenkouB: Int = 52
+    var iobDisplacement: Int = 26
+    var iobMinScore: Int = 1
+    var iobRequireTrend: Bool = false
+
+    // ── Volume-Filtered Order Block Detector ──
+    // Swing-anchored OBs with a volumetric split. `vfobShowHistoric` keeps
+    // invalidated (breaker) zones on the chart; `vfobVolumetricInfo` draws
+    // the up/down volume bar + balance %; `vfobInvalidation` (Wick/Close)
+    // picks what breaks a zone; `vfobSwingLength` tunes pivot size;
+    // `vfobZoneCount` (High/Medium/Low/One) caps how many zones per side
+    // render.
+    var vfobShowHistoric: Bool = true
+    var vfobVolumetricInfo: Bool = true
+    var vfobInvalidation: String = "Wick"
+    var vfobSwingLength: Int = 10
+    var vfobZoneCount: String = "Low"
 
     // We decode every field with `decodeIfPresent` (see init(from:)) so
     // adding a field no longer requires bumping this key — an older
@@ -389,6 +454,24 @@ struct OscillatorConfig: Codable, Equatable {
         fvgShowMitigated   = try c.decodeIfPresent(Bool.self,   forKey: .fvgShowMitigated)   ?? true
         sonarlabSensitivity = try c.decodeIfPresent(Double.self, forKey: .sonarlabSensitivity) ?? 26.0
         sonarlabMitigationType = try c.decodeIfPresent(String.self, forKey: .sonarlabMitigationType) ?? "Close"
+        robSwingLength     = try c.decodeIfPresent(Int.self,    forKey: .robSwingLength)     ?? 10
+        robZoneFrom        = try c.decodeIfPresent(String.self, forKey: .robZoneFrom)        ?? "Wicks"
+        robMaxATRMult      = try c.decodeIfPresent(Double.self, forKey: .robMaxATRMult)      ?? 3.5
+        robATRLength       = try c.decodeIfPresent(Int.self,    forKey: .robATRLength)       ?? 10
+        robInvalidation    = try c.decodeIfPresent(String.self, forKey: .robInvalidation)    ?? "Wick"
+        robZonesPerSide    = try c.decodeIfPresent(Int.self,    forKey: .robZonesPerSide)    ?? 3
+        robShowBreakers    = try c.decodeIfPresent(Bool.self,   forKey: .robShowBreakers)    ?? true
+        robCombineZones    = try c.decodeIfPresent(Bool.self,   forKey: .robCombineZones)    ?? true
+        robMergeThreshold  = try c.decodeIfPresent(Double.self, forKey: .robMergeThreshold)  ?? 0.0
+        robShowLabels      = try c.decodeIfPresent(Bool.self,   forKey: .robShowLabels)      ?? true
+        robUseVP           = try c.decodeIfPresent(Bool.self,   forKey: .robUseVP)           ?? true
+        robVPLookback      = try c.decodeIfPresent(Int.self,    forKey: .robVPLookback)      ?? 200
+        robVPRows          = try c.decodeIfPresent(Int.self,    forKey: .robVPRows)          ?? 24
+        robUseIchimoku     = try c.decodeIfPresent(Bool.self,   forKey: .robUseIchimoku)     ?? true
+        robTenkanLength    = try c.decodeIfPresent(Int.self,    forKey: .robTenkanLength)    ?? 9
+        robKijunLength     = try c.decodeIfPresent(Int.self,    forKey: .robKijunLength)     ?? 26
+        robSenkouBLength   = try c.decodeIfPresent(Int.self,    forKey: .robSenkouBLength)   ?? 52
+        robDisplacement    = try c.decodeIfPresent(Int.self,    forKey: .robDisplacement)    ?? 26
         chochSwingLength   = try c.decodeIfPresent(Int.self,    forKey: .chochSwingLength)   ?? 5
         chochMinSwingPct   = try c.decodeIfPresent(Double.self, forKey: .chochMinSwingPct)   ?? 0.2
         chochShowOB        = try c.decodeIfPresent(Bool.self,   forKey: .chochShowOB)        ?? true
@@ -402,10 +485,42 @@ struct OscillatorConfig: Codable, Equatable {
         chochHTFCount      = try c.decodeIfPresent(Int.self,    forKey: .chochHTFCount)      ?? 3
         vpBucketCount      = try c.decodeIfPresent(Int.self,    forKey: .vpBucketCount)      ?? 24
         vpValueAreaPct     = try c.decodeIfPresent(Double.self, forKey: .vpValueAreaPct)     ?? 70.0
-        vpUseZigzag        = try c.decodeIfPresent(Bool.self,   forKey: .vpUseZigzag)        ?? true
+        // `vpMode` replaced the old `vpUseZigzag` bool; decode the
+        // legacy key (kept out of the synthesized CodingKeys on
+        // purpose) as a fallback so existing configs keep their mode.
+        let legacyVP = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        let legacyZigzag = try legacyVP.decodeIfPresent(Bool.self, forKey: .vpUseZigzag) ?? true
+        vpMode             = try c.decodeIfPresent(String.self, forKey: .vpMode)           ?? (legacyZigzag ? "zigzag" : "session")
+        vpLevelCount       = try c.decodeIfPresent(Int.self,    forKey: .vpLevelCount)       ?? 5
         vpShowZigzag       = try c.decodeIfPresent(Bool.self,   forKey: .vpShowZigzag)       ?? true
         vpZZDepth          = try c.decodeIfPresent(Int.self,    forKey: .vpZZDepth)          ?? 5
         vpZZMinChange      = try c.decodeIfPresent(Double.self, forKey: .vpZZMinChange)      ?? 1.0
+        ichiTenkan         = try c.decodeIfPresent(Int.self,    forKey: .ichiTenkan)         ?? 9
+        ichiKijun          = try c.decodeIfPresent(Int.self,    forKey: .ichiKijun)          ?? 26
+        ichiSenkouB        = try c.decodeIfPresent(Int.self,    forKey: .ichiSenkouB)        ?? 52
+        ichiDisplacement   = try c.decodeIfPresent(Int.self,    forKey: .ichiDisplacement)   ?? 26
+        ichiShowChikou     = try c.decodeIfPresent(Bool.self,   forKey: .ichiShowChikou)     ?? true
+        ichiShowCloud      = try c.decodeIfPresent(Bool.self,   forKey: .ichiShowCloud)      ?? true
+        iobPeriods         = try c.decodeIfPresent(Int.self,    forKey: .iobPeriods)         ?? 5
+        iobThreshold       = try c.decodeIfPresent(Double.self, forKey: .iobThreshold)       ?? 0.0
+        iobUseWicks        = try c.decodeIfPresent(Bool.self,   forKey: .iobUseWicks)        ?? false
+        iobTenkan          = try c.decodeIfPresent(Int.self,    forKey: .iobTenkan)          ?? 9
+        iobKijun           = try c.decodeIfPresent(Int.self,    forKey: .iobKijun)           ?? 26
+        iobSenkouB         = try c.decodeIfPresent(Int.self,    forKey: .iobSenkouB)         ?? 52
+        iobDisplacement    = try c.decodeIfPresent(Int.self,    forKey: .iobDisplacement)    ?? 26
+        iobMinScore        = try c.decodeIfPresent(Int.self,    forKey: .iobMinScore)        ?? 1
+        iobRequireTrend    = try c.decodeIfPresent(Bool.self,   forKey: .iobRequireTrend)    ?? false
+        vfobShowHistoric   = try c.decodeIfPresent(Bool.self,   forKey: .vfobShowHistoric)   ?? true
+        vfobVolumetricInfo = try c.decodeIfPresent(Bool.self,   forKey: .vfobVolumetricInfo) ?? true
+        vfobInvalidation   = try c.decodeIfPresent(String.self, forKey: .vfobInvalidation)   ?? "Wick"
+        vfobSwingLength    = try c.decodeIfPresent(Int.self,    forKey: .vfobSwingLength)    ?? 10
+        vfobZoneCount      = try c.decodeIfPresent(String.self, forKey: .vfobZoneCount)      ?? "Low"
+    }
+
+    /// Retired persisted keys, kept solely so older saved payloads can
+    /// still be read during migration (see `vpMode` above).
+    private enum LegacyCodingKeys: String, CodingKey {
+        case vpUseZigzag
     }
 
     /// Whether the given `TradingSessions` preset id is toggled on. Used
@@ -443,6 +558,28 @@ struct OscillatorConfig: Codable, Equatable {
         if let data = try? JSONEncoder().encode(self) {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
+    }
+
+    var rankedOrderBlockConfiguration: RankedOrderBlocks.Config {
+        var config = RankedOrderBlocks.Config()
+        config.swingLength = robSwingLength
+        config.zoneSource = robZoneFrom == "Body" ? .body : .wicks
+        config.maxATRMult = robMaxATRMult
+        config.atrLength = robATRLength
+        config.invalidation = robInvalidation == "Close" ? .close : .wick
+        config.zonesPerSide = robZonesPerSide
+        config.showBreakers = robShowBreakers
+        config.combineOverlapping = robCombineZones
+        config.mergeThreshold = robMergeThreshold
+        config.useVolumeProfile = robUseVP
+        config.vpLookback = robVPLookback
+        config.vpRows = robVPRows
+        config.useIchimoku = robUseIchimoku
+        config.tenkanLength = robTenkanLength
+        config.kijunLength = robKijunLength
+        config.senkouBLength = robSenkouBLength
+        config.ichimokuDisplacement = robDisplacement
+        return config
     }
 
     var pinBarComboConfiguration: PinBarComboSetup.Configuration {

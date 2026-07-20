@@ -17,10 +17,10 @@ struct YahooDataBridge<Content: View>: View {
     @Binding var livePrices: [String: Double]
     @Binding var isFetching: Bool
     @Binding var dataResetToken: Int
-    let content: () -> Content
+    let content: (YahooScheduler) -> Content
 
     var body: some View {
-        content()
+        content(yahoo)
             .onReceive(
                 yahoo.$latestPrices
                     .throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)

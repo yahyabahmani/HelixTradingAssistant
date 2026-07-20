@@ -46,6 +46,22 @@ enum ChartWindow {
         return lo ... hi
     }
 
+    /// Candle-only Y (price) fit for the bar-index window `domain`, with
+    /// the usual ~5% padding. Deliberately ignores indicators and
+    /// overlays (S/R, FVG, order blocks, scenarios, …) — the Reset
+    /// action frames the *candles*, not whatever an indicator's extreme
+    /// happens to be, so a far-away SMA / target line can't squash the
+    /// price action into a sliver. Returns nil for an empty series.
+    static func candleYDomain(candles: [Candle], domain: ClosedRange<Double>) -> ClosedRange<Double>? {
+        guard let (lo, hi) = visibleBounds(domain: domain, count: candles.count) else { return nil }
+        let slice = candles[lo ... hi]
+        guard let low = slice.map(\.low).min(),
+              let high = slice.map(\.high).max() else { return nil }
+        let span = max(high - low, high * 0.001, 1.0)
+        let pad = span * 0.05
+        return (low - pad) ... (high + pad)
+    }
+
     /// The visible bar-index bounds for `domain` over a `count`-bar
     /// series, clamped to `0...count-1`. nil when nothing is visible
     /// (empty series or a domain entirely off either edge).

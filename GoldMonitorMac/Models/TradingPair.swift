@@ -75,6 +75,10 @@ extension TradingPair {
         // tier). 15m delayed on Yahoo for US indices but fine for
         // chart + TA. Respects weekend close.
         .init(id: "dji",      name: "Dow Jones",        symbol: "DJI",  colorHex: "#3B82F6", category: .indices),
+
+        // Dollar index — Faraz TVC_DXY live + history, Yahoo DX-Y.NYB
+        // when the source toggle is off Faraz.
+        .init(id: "dxy",      name: "US Dollar Index",  symbol: "DXY",  colorHex: "#22C55E", category: .indices),
     ]
 
     /// Build the runtime `TradingPair` rows from the catalog. Prices

@@ -4,7 +4,7 @@ import SwiftUI
 /// a left rail of category buttons plus the selected category's
 /// cards on the right. Every wizard-collected value is also
 /// editable here, plus everything that was only ever in settings
-/// (markets toggles, Claude model + effort, SOCKS5 proxy, cTrader
+/// (markets toggles, Claude model + effort, SOCKS5 proxy,
 /// bridge).
 struct SettingsView: View {
     @EnvironmentObject private var app: AppState
@@ -182,7 +182,6 @@ struct SettingsView: View {
         case .data:       DataSourcesCard()
         case .ai:         aiSection
         case .network:    proxyCard
-        case .ctrader:    CTraderBridgeCard()
         case .autoTrader: AutoTraderCard()
         case .about:      UpdatesCard()
         }
@@ -258,7 +257,7 @@ struct SettingsView: View {
                     Text("Setup wizard")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Color.textPrimary)
-                    Text("Re-run the first-launch flow to re-detect Claude, swap your Twelve Data key, or reconfigure the cTrader bridge.")
+                    Text("Re-run the first-launch flow to re-detect Claude or swap your Twelve Data key.")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.Color.textSecondary)
                 }
@@ -283,7 +282,7 @@ struct SettingsView: View {
                     marketRow(
                         symbol: "dollarsign.circle.fill",
                         title: "Forex",
-                        subtitle: "XAU/USD ounce via Yahoo / Twelve Data / cTrader"
+                        subtitle: "XAU/USD ounce via Yahoo / Twelve Data"
                     )
                 }
                 .toggleStyle(.switch)

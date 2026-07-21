@@ -2,7 +2,7 @@
 
 **Read [AGENTS.md](AGENTS.md) — it is the single working brief for this
 repository** (architecture, build & run, key patterns, conventions &
-gotchas, iPad target, cTrader bridge, open work, version history, and the
+gotchas, iPad target, open work, version history, and the
 mandatory session-logging workflow). Everything that used to live in
 README.md, CHANGELOG.md, the release notes, CTS_IMPROVEMENT_PLAN.md, and
 ipadapp/REDESIGN.md was consolidated there.

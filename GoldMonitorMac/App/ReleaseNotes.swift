@@ -35,6 +35,34 @@ struct ReleaseNotes {
     let highlights: [ReleaseHighlight]
 
     static let latest = ReleaseNotes(
+        version: "1.5",
+        tagline: "On-chart position planning, four new order-block indicators, news markers, and a corrected risk calculator.",
+        highlights: [
+            .init(icon: "arrow.up.right.square",
+                  title: "On-chart position tool",
+                  detail: "Drop a long or short position straight onto the chart and drag its entry, stop, target, or time extent. Each position carries its own account balance and risk %, and shows live lot size, profit, loss, and R:R as you move it. Sizing uses per-instrument contract specs, so gold, oil, crypto, and indices each size correctly."),
+            .init(icon: "exclamationmark.triangle.fill",
+                  title: "Risk calculator sizing fix",
+                  detail: "Gold position sizes were 10× too large. The calculator treated the entry-to-stop distance as \"points\" ($0.10 each) while measuring it in dollars — a 4035 → 4045 stop at 1% returned 0.1 lot instead of 0.01. Sizes now come from the same contract spec the chart tool uses."),
+            .init(icon: "square.stack.3d.up.badge.a",
+                  title: "Four new order-block indicators",
+                  detail: "Ranked OB grades swing order blocks A/B/C on Volume-Profile and Ichimoku confluence with a breaker lifecycle. Volume-Filtered OB adds a volumetric up/down split, ATR size filter, and zone merging. Plus a full Ichimoku Cloud and Ichimoku-confluence Order Blocks."),
+            .init(icon: "newspaper.fill",
+                  title: "News markers on the chart",
+                  detail: "Economic events plot as TradingView-style flags along the time axis — click one for the full detail popover, on both Mac and iPad."),
+            .init(icon: "chart.bar.xaxis.ascending",
+                  title: "Volume Profile overhaul",
+                  detail: "Three modes: per-trading-day sessions anchored to 18:00 ET, the last ZigZag trend segment, or visible-range with ranked high-volume levels. Two-tone up/down buckets with POC and value-area highs/lows."),
+            .init(icon: "arrow.left.and.right",
+                  title: "Draw anywhere, including ahead of price",
+                  detail: "Drawings are no longer pinned to the last candle — drag one into the empty space right of the chart to plan a setup ahead of price. On iPad, drawings can now be dragged and reshaped at all, which previously did nothing."),
+            .init(icon: "waveform.path.ecg",
+                  title: "New strategies and symbols",
+                  detail: "SP2L, Pin Bar Combo, MicroMap, and Major Trend Reversal close-confirmed strategies, higher-timeframe CHoCH zones projected onto the current timeframe, and WTI Crude plus the US Dollar Index as tradeable symbols."),
+        ]
+    )
+
+    static let v1_4 = ReleaseNotes(
         version: "1.4",
         tagline: "Multiple journals, an in-app updater, the OpenCode engine, and a smoother, faster chart.",
         highlights: [

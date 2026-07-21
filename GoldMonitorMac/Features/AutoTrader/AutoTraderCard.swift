@@ -140,10 +140,10 @@ struct AutoTraderCard: View {
                     .font(.system(size: 16))
                     .foregroundStyle(Theme.Color.info)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Live mode is XAU/USD-only in this build.")
+                    Text("Paper trading only.")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.Color.textPrimary)
-                    Text("Auto-trader on other pairs runs in paper mode regardless of the toggle below — the cTrader bridge supports one symbol at a time. Multi-symbol routing ships in a follow-up.")
+                    Text("The auto-trader stages simulated trades and tracks their P&L — no order ever reaches a real broker.")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.Color.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -236,7 +236,7 @@ struct AutoTraderCard: View {
 
     private func summaryLine(_ cfg: AutoTraderConfig) -> String {
         var parts: [String] = []
-        parts.append(cfg.paperMode ? "Paper" : "LIVE")
+        parts.append("Paper")
         parts.append("risk \(String(format: "%.1f", cfg.riskPercent))%")
         if let trail = cfg.trailingATRMultiple {
             parts.append("trail \(String(format: "%.1f", trail))×ATR")
@@ -340,7 +340,7 @@ struct AutoTraderCard: View {
                     Image(systemName: "bolt.slash.fill")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Theme.Color.warn)
-                    Text("Scalp needs sub-second ticks — connect the cTrader bridge or expect Yahoo's 10 s polling to lag your stops.")
+                    Text("Scalp needs sub-second ticks — the bundled feeds poll every few seconds, so expect stops to lag on 1m/5m setups.")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Theme.Color.warn)
                         .fixedSize(horizontal: false, vertical: true)
@@ -381,39 +381,15 @@ struct AutoTraderCard: View {
     }
 
     private func modeSwitch(pair: TradingPair) -> some View {
-        let cfg = configStore.config(for: pair.id)
-        let isOunce = pair.id == "ounce"
-        return VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("MODE")
                 .font(.system(size: 9, weight: .bold))
                 .tracking(0.8)
                 .foregroundStyle(Theme.Color.textMuted)
             HStack(spacing: 6) {
-                modeChip(label: "Paper", isOn: cfg.paperMode, tint: Theme.Color.warn) {
-                    var c = cfg; c.paperMode = true; configStore.update(c, for: pair.id)
-                }
-                modeChip(label: "LIVE", isOn: !cfg.paperMode, tint: Theme.Color.danger) {
-                    guard isOunce else { return }
-                    var c = cfg; c.paperMode = false; configStore.update(c, for: pair.id)
-                }
-                .disabled(!isOunce)
-                .opacity(isOunce ? 1 : 0.4)
-                .help(isOunce ? "Send real orders via the cTrader bridge." : "Live mode is ounce-only in this build.")
+                modeChip(label: "Paper", isOn: true, tint: Theme.Color.warn) {}
+                    .help("This build is paper-only — no broker connection.")
                 Spacer()
-            }
-            if !cfg.paperMode {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.octagon.fill")
-                        .foregroundStyle(Theme.Color.danger)
-                    Text("LIVE — every staged scenario will send a real order to your broker.")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.Color.danger)
-                }
-                .padding(Theme.Spacing.sm)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Theme.Color.danger.opacity(0.15))
-                )
             }
         }
     }

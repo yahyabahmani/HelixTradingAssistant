@@ -55,13 +55,6 @@ targets:
     sources:
       - path: GoldMonitorMac
       - path: GoldMonitorMac/Resources
-      # cBot source bundled into the app so the Wizard can show
-      # it inline and copy to clipboard. Canonical location is
-      # CTraderBridge/HelixBridgeBot.cs (sibling of the app
-      # sources); listed here with `buildPhase: resources` to
-      # force it into the Resources phase rather than Sources.
-      - path: CTraderBridge/HelixBridgeBot.cs
-        buildPhase: resources
     resources:
       - path: GoldMonitorMac/Resources/Assets.xcassets
     dependencies:
@@ -74,8 +67,8 @@ targets:
       properties:
         CFBundleName: HelixTrading
         CFBundleDisplayName: Helix Trading App
-        CFBundleShortVersionString: "1.4"
-        CFBundleVersion: "7"
+        CFBundleShortVersionString: "1.5"
+        CFBundleVersion: "8"
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: "Copyright © 2026 Helix Trading Club. All rights reserved."
         NSAppTransportSecurity:
@@ -138,7 +131,6 @@ targets:
           - "**/DrawingInspector.swift"
           - "**/ChartSkeleton.swift"
           - "**/RiskCalculatorView.swift"
-          - "**/CTraderBridgeCard.swift"
           - "**/UpdatesCard.swift"
           - "**/AnalysisActionDock.swift"
           - "**/AnalysisAspectCard.swift"
@@ -147,8 +139,6 @@ targets:
           - "**/AnalysisReportColumn.swift"
           - "**/Info.plist"
       - path: ipadapp/HelixTradingApp-iPad
-      - path: CTraderBridge/HelixBridgeBot.cs
-        buildPhase: resources
     resources:
       - path: ipadapp/HelixTradingApp-iPad/Resources/Assets.xcassets
       - path: ipadapp/HelixTradingApp-iPad/Resources/LaunchScreen.storyboard

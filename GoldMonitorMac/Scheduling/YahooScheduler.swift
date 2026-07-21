@@ -214,34 +214,20 @@ final class YahooScheduler: ObservableObject {
     /// connection this session (even if it's currently disconnected/reconnecting).
     @Published private(set) var farazWSEverConnected: Bool = false
 
-    /// Optional higher-priority source for the XAU/USD live feed. When
-    /// set and "fresh", TwelveData ticks AND the gold-api fallback are
-    /// suppressed for the ounce pair — same data flows through, just
-    /// from cTrader instead. Other symbols are unaffected.
-    private weak var cTraderProvider: CTraderScheduler?
-    /// Repo reference cached at start() so external entry points
-    /// (cTrader pushes via applyExternalTick) can roll bars without
-    /// re-plumbing the AppDatabase through every call. OHLCRepo is a
-    /// value type so a strong reference is fine.
+    /// Repo reference cached at start() so external entry points can
+    /// roll bars without re-plumbing the AppDatabase through every
+    /// call. OHLCRepo is a value type so a strong reference is fine.
     private var cachedRepo: OHLCRepo?
 
-    /// Inject the cTrader scheduler so this YahooScheduler can ask
-    /// "should I suppress my XAU ticks because cTrader is hotter?".
-    /// Pass `nil` to clear (e.g. for unit tests). Called once at boot.
-    func attachCTraderProvider(_ provider: CTraderScheduler) {
-        self.cTraderProvider = provider
-    }
-
     /// External entry point for ticks from sources OTHER than this
-    /// scheduler's owned TwelveData / gold-api / Yahoo. Used by
-    /// `CTraderScheduler` to feed cTrader ticks through the exact
-    /// same OHLC + published-price pipeline as everything else.
-    /// No-op until `start(database:)` has populated `cachedRepo`.
+    /// scheduler's owned TwelveData / gold-api / Yahoo, feeding them
+    /// through the exact same OHLC + published-price pipeline as
+    /// everything else. No-op until `start(database:)` has populated
+    /// `cachedRepo`.
     func applyExternalTick(price: Double, pairID: String, source: String) {
         guard let repo = cachedRepo else { return }
         // applyLiveTick is async (DB bar-roll runs off-main). Hop onto a
-        // task so this synchronous entry point stays non-blocking for its
-        // caller (the cTrader flush loop).
+        // task so this synchronous entry point stays non-blocking.
         Task { await self.applyLiveTick(price: price, pairID: pairID, source: source, repo: repo) }
     }
 
@@ -526,13 +512,6 @@ final class YahooScheduler: ObservableObject {
             // entirely in this case, but the per-tick gate stays as a
             // belt-and-braces against a windowed source switch.
             if self.usesFaraz(id) { return }
-            // Fallback gate: if cTrader is currently the authoritative
-            // source for ounce, don't let TwelveData overwrite it.
-            // Other pairs are unaffected because cTrader only streams
-            // XAU/USD today.
-            if id == "ounce", self.cTraderProvider?.isFreshForXAUUSD() == true {
-                return
-            }
             Task { await self.applyLiveTick(price: price, pairID: id, source: "twelve-data", repo: repo) }
         }
         s.start()
@@ -618,7 +597,7 @@ final class YahooScheduler: ObservableObject {
     /// — including the whole `DashboardView` body, `ChartView`, the
     /// three `OscillatorPanel`s, the sidebar `PairRow`s, etc.
     ///
-    /// Live providers (Twelve Data WS, Faraz WS, cTrader flush) can push
+    /// Live providers (Twelve Data WS, Faraz WS) can push
     /// 5–20 ticks per second per symbol; an unthrottled publish pegs the
     /// main thread on chart redraws. 1 Hz is plenty for the price-tag UI
     /// AND for the trade / alert evaluators (they observe
@@ -1003,7 +982,7 @@ final class YahooScheduler: ObservableObject {
         repo: OHLCRepo
     ) async {
         // When this pair is on Faraz, its 10s poll is the only writer —
-        // ignore ticks from every other provider (Twelve Data, cTrader,
+        // ignore ticks from every other provider (Twelve Data,
         // gold-api) so they can't interleave a second source's prices.
         if usesFaraz(pairID) { return }
         let cfg = pairs.first { $0.pairID == pairID }

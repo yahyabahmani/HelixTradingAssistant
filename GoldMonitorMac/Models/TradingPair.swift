@@ -4,7 +4,7 @@ import SwiftUI
 /// A trading pair shown in the sidebar. After the open-source cut,
 /// only live-streamed pairs are supported (Metal + Crypto) — there's
 /// no longer a snapshot-table pipeline, so every pair sources its
-/// price + history from `YahooScheduler` / `CTraderScheduler` /
+/// price + history from `YahooScheduler` /
 /// `TwelveDataSpotStream`.
 struct TradingPair: Identifiable, Hashable {
     let id: String          // e.g. "ounce", "btc", "eth", "sol"
@@ -58,8 +58,7 @@ extension TradingPair {
     /// + three crypto majors — extending the catalog is a one-line
     /// `.init(...)` addition here.
     static let catalog: [PairDefinition] = [
-        // Forex — XAU/USD ounce (Twelve Data WS + Yahoo history,
-        // cTrader bridge takes over when running).
+        // Forex — XAU/USD ounce (Twelve Data WS + Yahoo history).
         .init(id: "ounce",    name: "Gold Ounce",       symbol: "XAU",  colorHex: "#EAB308", category: .forex),
 
         // Commodity — WTI crude oil (Faraz WTICO_USD live, Yahoo CL=F

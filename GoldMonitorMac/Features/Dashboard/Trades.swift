@@ -29,13 +29,14 @@ struct Trade: Identifiable, Codable, Equatable {
     /// True when this trade is paper-only — `TradeStore.evaluate`
     /// drives its lifecycle by replaying live ticks against
     /// entry/TP/SL. False for live trades whose lifecycle is owned
-    /// by the cTrader cBot (state transitions arrive via
-    /// `order_status` events through `CTraderWSReceiver`).
+    /// by a broker integration (none in the current paper-only
+    /// build; the fields remain for previously persisted trades).
     /// `decodeIfPresent`-friendly default `true` so pre-existing
     /// persisted trades (which all predate the live path) keep
     /// loading as paper.
     let isPaper: Bool
-    /// cTrader's broker-side order id for `isPaper: false` trades.
+    /// Broker-side order id for `isPaper: false` trades from
+    /// older builds.
     /// Used by the cBot reconciliation path to find + mutate the
     /// matching local Trade when an `order_status` event arrives.
     /// Nil for paper trades.
@@ -391,7 +392,7 @@ final class TradeStore: ObservableObject {
             var t = list[idx]
             // Critical invariant: live trades are owned by the cBot.
             // Their state transitions arrive via `order_status` events
-            // through `CTraderWSReceiver` and get applied via
+            // through a broker integration and get applied via
             // `applyLiveOrderStatus(...)`. Replaying our local tick
             // stream against them would race the broker's own fill
             // confirmation and produce desynced state.
@@ -448,7 +449,7 @@ final class TradeStore: ObservableObject {
     /// Apply an `order_status` event from the cBot to the matching
     /// live trade. Lookup is by `liveOrderID`; no-op when nothing
     /// matches (e.g. stale event after the user manually removed
-    /// the trade). Called from `CTraderScheduler` when an event
+    /// the trade). Called when a broker event
     /// arrives via the bridge.
     func applyLiveOrderStatus(
         liveOrderID: String,

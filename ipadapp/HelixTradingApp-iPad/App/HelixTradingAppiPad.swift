@@ -4,7 +4,6 @@ import SwiftUI
 struct HelixTradingAppiPad: App {
     @StateObject private var appState = AppState()
     @StateObject private var yahoo = YahooScheduler()
-    @StateObject private var ctrader = CTraderScheduler()
     @StateObject private var news = NewsStore()
     @StateObject private var analysisStore = AnalysisStore()
     @StateObject private var tradeStore = TradeStore()
@@ -21,7 +20,6 @@ struct HelixTradingAppiPad: App {
             RootViewiPad()
                 .environmentObject(appState)
                 .environmentObject(yahoo)
-                .environmentObject(ctrader)
                 .environmentObject(news)
                 .environmentObject(analysisStore)
                 .environmentObject(tradeStore)
@@ -43,7 +41,6 @@ struct HelixTradingAppiPad: App {
                         configStore: autoTraderConfig,
                         analysisStore: analysisStore,
                         tradeStore: tradeStore,
-                        cTrader: ctrader,
                         news: news,
                         paperBalance: paperBalance
                     )
@@ -57,10 +54,6 @@ struct HelixTradingAppiPad: App {
 
                     if let db = appState.database {
                         yahoo.start(database: db)
-                        yahoo.attachCTraderProvider(ctrader)
-                        ctrader.start(database: db) { [weak yahoo] price, pairID, source in
-                            yahoo?.applyExternalTick(price: price, pairID: pairID, source: source)
-                        }
                         // iPad: only sync the selected pair to reduce CPU
                         yahoo.focusedPairID = appState.selectedPairID
                     }

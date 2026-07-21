@@ -58,7 +58,7 @@ struct StrategyProfileSheet: View {
                     Image(systemName: "bolt.slash.fill")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Theme.Color.warn)
-                    Text("Scalp needs sub-second ticks — connect the cTrader bridge or expect lag on stops.")
+                    Text("Scalp needs sub-second ticks — the bundled feeds poll every few seconds, so expect lag on stops.")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Theme.Color.warn)
                         .fixedSize(horizontal: false, vertical: true)

@@ -3914,7 +3914,7 @@ struct ChartView: View {
     /// Finds the bar index of the candle where `price` first fell inside
     /// the candle's [low, high] range, searching backward from `fromIndex`.
     /// Used to locate the open candle when we only have the entry price
-    /// (no open timestamp — typical for cTrader imports).
+    /// (no open timestamp — typical for CSV statement imports).
     private func barIndexForEntryPrice(_ price: Double, before fromIndex: Int) -> Int? {
         guard fromIndex >= 0, fromIndex < candles.count else { return nil }
         for i in stride(from: fromIndex, through: 0, by: -1) {

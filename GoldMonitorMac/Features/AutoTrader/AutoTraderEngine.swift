@@ -4,10 +4,10 @@ import SwiftUI
 
 /// Orchestration layer for auto-trading. Lives at the app root,
 /// owns the per-pair state machine, subscribes to the inputs
-/// (`AnalysisStore` history, `TradeStore` lifecycle,
-/// `CTraderScheduler` bridge events, `NewsStore` calendar) and
-/// emits the side-effects (stage paper or live orders, schedule
-/// re-analysis on the next candle close).
+/// (`AnalysisStore` history, `TradeStore` lifecycle, `NewsStore`
+/// calendar) and emits the side-effects (stage paper trades,
+/// schedule re-analysis on the next candle close). Paper-only —
+/// no orders ever reach a real broker.
 ///
 /// The engine is **passive** — it never initiates a Confluence Trade Scanner run
 /// on its own. The user kicks off the first run from
@@ -79,7 +79,6 @@ final class AutoTraderEngine: ObservableObject {
     private var configStore: AutoTraderConfigStore?
     private var analysisStore: AnalysisStore?
     private var tradeStore: TradeStore?
-    private var cTrader: CTraderScheduler?
     private var news: NewsStore?
     private var paperBalance: PaperBalance?
 
@@ -151,7 +150,6 @@ final class AutoTraderEngine: ObservableObject {
         configStore: AutoTraderConfigStore,
         analysisStore: AnalysisStore,
         tradeStore: TradeStore,
-        cTrader: CTraderScheduler,
         news: NewsStore,
         paperBalance: PaperBalance
     ) {
@@ -159,7 +157,6 @@ final class AutoTraderEngine: ObservableObject {
         self.configStore = configStore
         self.analysisStore = analysisStore
         self.tradeStore = tradeStore
-        self.cTrader = cTrader
         self.news = news
         self.paperBalance = paperBalance
 
@@ -176,13 +173,6 @@ final class AutoTraderEngine: ObservableObject {
                 self?.observeTrades(byPair)
             }
             .store(in: &cancellables)
-
-        cTrader.onOrderStatus = { [weak self] status in
-            self?.handleOrderStatus(status)
-        }
-        cTrader.onStateSnapshot = { [weak self] snap in
-            self?.handleStateSnapshot(snap)
-        }
 
         // Warm the news cache so the safety gate has data on
         // first scenario landing.
@@ -561,7 +551,7 @@ final class AutoTraderEngine: ObservableObject {
             id: UUID(),
             pairID: pairID,
             sourceHistoryEntryID: entry.id,
-            isPaper: cfg.paperMode || pairID != "ounce",     // Live only for ounce in v1
+            isPaper: true,     // paper-only build — no broker transport
             liveOrderID: nil,
             side: side,
             entry: entryPx,
@@ -573,46 +563,8 @@ final class AutoTraderEngine: ObservableObject {
             visible: true
         )
 
-        if trade.isPaper {
-            tradeStore.add(trade, for: pairID)
-            stateByPair[pairID] = .staged(scenarioID: scenario.id, expectingFill: true)
-        } else {
-            // Live: assign a helix_id, push the place_order to the
-            // cBot, and mirror locally with liveOrderID = helix_id
-            // (the cBot returns it in every order_status event so
-            // we use it as the join key).
-            let helixID = trade.id.uuidString
-            let liveTrade = Trade(
-                id: trade.id,
-                pairID: trade.pairID,
-                sourceHistoryEntryID: trade.sourceHistoryEntryID,
-                isPaper: false,
-                liveOrderID: helixID,
-                side: trade.side,
-                entry: trade.entry,
-                takeProfit: trade.takeProfit,
-                stopLoss: trade.stopLoss,
-                lots: trade.lots,
-                createdAt: trade.createdAt,
-                status: .pending,
-                visible: true
-            )
-            tradeStore.add(liveTrade, for: pairID)
-            cTrader?.sendPlaceOrder(
-                helixID: helixID,
-                client: "XAUUSD",   // hardcoded for ounce-only v1
-                side: side == .short ? "sell" : "buy",
-                entryKind: "limit",
-                entry: entryPx,
-                tp: scenario.takeProfit,
-                sl: scenario.stopLoss,
-                lots: lots,
-                trailingATR: cfg.trailingATRMultiple,
-                atrPeriod: cfg.atrPeriod,
-                atrValue: nil
-            )
-            stateByPair[pairID] = .staged(scenarioID: scenario.id, expectingFill: true)
-        }
+        tradeStore.add(trade, for: pairID)
+        stateByPair[pairID] = .staged(scenarioID: scenario.id, expectingFill: true)
     }
 
     // ── Inputs: trade observer → re-trigger ──────────────────────
@@ -934,39 +886,6 @@ final class AutoTraderEngine: ObservableObject {
     private func inCooldown(pairID: String) -> Bool {
         guard let until = cooldownExpiry[pairID] else { return false }
         return Date() < until
-    }
-
-    // ── Inputs: bridge events ────────────────────────────────────
-
-    private func handleOrderStatus(_ status: CTraderWSReceiver.OrderStatus) {
-        guard let tradeStore = tradeStore, let helixID = status.helix_id else { return }
-        let state = TradeStore.LiveOrderState(rawValue: status.state) ?? .placed
-        let reason: Trade.CloseReason? = status.close_reason.flatMap { Trade.CloseReason(rawValue: $0) }
-        tradeStore.applyLiveOrderStatus(
-            liveOrderID: helixID,
-            state: state,
-            fillPrice: status.fill_price,
-            closePrice: status.close_price,
-            closeReason: reason
-        )
-    }
-
-    private func handleStateSnapshot(_ snap: CTraderWSReceiver.StateSnapshot) {
-        guard let tradeStore = tradeStore else { return }
-        let known = Set(
-            snap.positions.compactMap { $0.helix_id } +
-            snap.orders.compactMap   { $0.helix_id }
-        )
-        for (_, trades) in tradeStore.byPair {
-            for trade in trades where !trade.isPaper && !trade.isClosed {
-                guard let live = trade.liveOrderID, !known.contains(live) else { continue }
-                tradeStore.applyLiveOrderStatus(
-                    liveOrderID: live,
-                    state: .closed,
-                    closeReason: .reconciliation
-                )
-            }
-        }
     }
 
     // ── Safety gates ──────────────────────────────────────────────

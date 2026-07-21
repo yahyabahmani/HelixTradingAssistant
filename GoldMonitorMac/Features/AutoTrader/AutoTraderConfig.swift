@@ -19,7 +19,7 @@ enum StrategyProfile: String, Codable, CaseIterable, Identifiable {
     /// horizon, anchored on 4h bias with 1h/15m execution.
     case swing
     /// 1m / 5m / 15m — scalper mode. Fast triggers, tight stops,
-    /// lots of runs. Requires the cTrader bridge (or another
+    /// lots of runs. Requires a fast tick source (or another
     /// sub-second tick source) to be useful — Yahoo's 10s polling
     /// lags badly at this timescale.
     case scalp

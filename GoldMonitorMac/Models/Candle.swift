@@ -170,7 +170,7 @@ enum HeikinAshi {
 
 /// Fold pre-aggregated OHLC bars into a coarser timeframe. All pairs
 /// now store 1m and 5m bars from Yahoo (or live ticks from
-/// TwelveData / cTrader); coarser timeframes are rolled up on the
+/// TwelveData); coarser timeframes are rolled up on the
 /// fly. Bars in → bars out: open=first bar's open, close=last bar's
 /// close, high/low = extremes across the group.
 enum OHLCAggregator {

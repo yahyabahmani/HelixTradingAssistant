@@ -1,19 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" role="img" aria-label="Helix Trading Assistant — AI co-pilot completes its analysis, then applies S/R, FVG, and trade markers onto the chart.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" role="img" aria-label="Helix Trading Assistant — the AI scans structure, marks order-block zones, places a buy limit at the zone, price fills it and rallies into take-profit.">
   <!--
-    Helix Trading Assistant — AI co-pilot animation.
-    14s loop. Story (this revision: AI finishes FIRST, then applies):
-      0.0– 2.0s  : Clean chart prints. AI panel IDLE.
-      2.0– 3.0s  : AI wakes: spinner, status "ANALYSING…".
-      3.0– 7.0s  : Markdown plan streams into panel. Chart stays clean.
-      7.0– 7.5s  : Status flips to "PLAN READY". APPLY button appears & pulses.
-      7.5– 8.0s  : "Click" — button flashes; 3 particles fly from button to chart.
-      8.0– 9.5s  : Particles land → S/R lines DRAW ON across chart in sequence.
-      9.0–10.0s  : FVG zone fades in.
-      9.5–10.5s  : Entry / SL / TP markers land on candles with arrows.
-     10.5–11.0s  : Card footer fills with trade summary + R:R + confidence chips.
-     11.0–13.0s  : Full assisted state holds.
-     13.0–14.0s  : Fade → loop.
+    Helix Trading Assistant — Order-Block trade animation.
+    18s loop. Story:
+      0.0– 1.0s : Clean chart prints (rally off the OB impulse). AI IDLE.
+      2.0– 5.3s : AI scans: radar beam sweeps the chart twice, plan streams.
+      4.4– 5.3s : Order Block zones detected — bearish OB (top), bullish OB
+                  (bottom) wipe on with grade tag A 4/5.
+      5.4– 6.0s : PLACE LIMIT button pulses + presses; particles fly to chart.
+      6.5– 7.3s : BUY LIMIT / SL / TP lines draw on; position box shades R:R.
+      7.2– 9.4s : Price retraces candle-by-candle into the zone.
+      9.4s      : Limit FILLS — ripple + FILLED toast; status LONG OPEN.
+     10.1–13.1s : Rally candle-by-candle out of the zone toward target.
+     13.2s      : TP HIT — ring burst, confetti, +2.0R chip, green aura.
+     13.4–16.9s : Winning state holds.
+     16.9–17.5s : Fade → loop.
   -->
 
   <defs>
@@ -33,6 +34,11 @@
     <linearGradient id="purple" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#c4b5fd"/>
       <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+    <linearGradient id="beamGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="#a78bfa" stop-opacity="0"/>
+      <stop offset="70%"  stop-color="#a78bfa" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.55"/>
     </linearGradient>
 
     <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
@@ -76,7 +82,7 @@
       Helix Trading Assistant
     </text>
     <text x="480" y="58" text-anchor="middle" fill="#7c8ba8" font-size="11" letter-spacing="1.2">
-      AI CO-PILOT  ·  ANALYSE  →  APPLY TO CHART  →  TRADE
+      SPOT ORDER BLOCKS  →  PLACE THE LIMIT  →  RIDE IT TO TP
     </text>
   </g>
 
@@ -86,13 +92,21 @@
   <g>
     <rect x="40" y="80" width="576" height="400" rx="14" fill="url(#card)" stroke="#2e3a63" stroke-width="1.2"/>
 
-    <!-- Chart card receives a brief purple aura when overlays land (8s) -->
+    <!-- Purple aura when the limit lands (6s) -->
     <rect x="40" y="80" width="576" height="400" rx="14" fill="none" stroke="#a78bfa"
           stroke-width="1.8" opacity="0">
       <animate attributeName="opacity"
-               values="0;0;0.85;0.4;0"
-               keyTimes="0;0.571;0.6;0.7;0.9"
-               dur="14s" repeatCount="indefinite"/>
+               values="0;0;0.8;0.35;0;0"
+               keyTimes="0;0.35;0.361;0.40;0.43;1"
+               dur="18s" repeatCount="indefinite"/>
+    </rect>
+    <!-- Green aura when TP hits (13.2s) -->
+    <rect x="40" y="80" width="576" height="400" rx="14" fill="none" stroke="#34d399"
+          stroke-width="2" opacity="0">
+      <animate attributeName="opacity"
+               values="0;0;0.9;0.4;0;0"
+               keyTimes="0;0.733;0.744;0.80;0.85;1"
+               dur="18s" repeatCount="indefinite"/>
     </rect>
 
     <!-- Header strip -->
@@ -102,7 +116,7 @@
       <circle cx="86" cy="102" r="4.5" fill="#22c55e"/>
       <text x="106" y="106" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
             font-size="11" fill="#94a3b8" letter-spacing="0.5">
-        XAU / USD  ·  1H  ·  Yahoo + cTrader bridge
+        XAU / USD  ·  1H  ·  Yahoo + TwelveData
       </text>
 
       <g transform="translate(478,93)">
@@ -139,128 +153,417 @@
     </g>
 
     <g clip-path="url(#chartClip)">
-      <!-- Continuous candle scroll -->
+
+      <!-- ── Base candles: the impulse that leaves the OB behind ── -->
+      <g opacity="0">
+        <animate attributeName="opacity"
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.006;0.045;0.939;0.972;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <g color="#34d399"><use href="#cU" x="84"  y="300"/></g>
+        <g color="#34d399"><use href="#cU" x="108" y="290"/></g>
+        <g color="#f87171"><use href="#cD" x="132" y="296"/></g>
+        <g color="#34d399"><use href="#cU" x="156" y="282"/></g>
+        <g color="#34d399"><use href="#cU" x="180" y="270"/></g>
+        <g color="#f87171"><use href="#cD" x="204" y="276"/></g>
+        <g color="#34d399"><use href="#cU" x="228" y="262"/></g>
+        <g color="#34d399"><use href="#cU" x="252" y="248"/></g>
+        <g color="#34d399"><use href="#cU" x="276" y="236"/></g>
+        <g color="#34d399"><use href="#cU" x="300" y="226"/></g>
+      </g>
+
+      <!-- ── Scan beam: sweeps twice while the AI reads structure ── -->
+      <g opacity="0">
+        <animate attributeName="opacity"
+                 values="0;0;0.9;0.9;0;0"
+                 keyTimes="0;0.111;0.117;0.289;0.30;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <g>
+          <animateTransform attributeName="transform" type="translate"
+                            values="0,0;0,0;522,0;0,0;522,0;522,0"
+                            keyTimes="0;0.111;0.20;0.205;0.294;1"
+                            dur="18s" repeatCount="indefinite"/>
+          <rect x="24" y="158" width="40" height="208" fill="url(#beamGrad)"/>
+          <line x1="64" y1="158" x2="64" y2="366" stroke="#c4b5fd" stroke-width="1.6"
+                filter="url(#softGlow)"/>
+        </g>
+      </g>
+
+      <!-- ── Bearish OB (historic, dim) wipes on at 4.4s ── -->
       <g>
+        <rect x="64" y="172" height="18" fill="#f87171" opacity="0.10" width="0">
+          <animate attributeName="width"
+                   values="0;0;256;256;0;0"
+                   keyTimes="0;0.244;0.272;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </rect>
+        <rect x="64" y="172" height="18" fill="none" stroke="#f87171" stroke-opacity="0.35"
+              stroke-width="0.8" stroke-dasharray="3 3" width="0">
+          <animate attributeName="width"
+                   values="0;0;256;256;0;0"
+                   keyTimes="0;0.244;0.272;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </rect>
+        <g opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;1;0;0"
+                   keyTimes="0;0.272;0.283;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+          <text x="70" y="184" font-family="ui-monospace, monospace" font-size="8"
+                font-weight="700" fill="#fca5a5" opacity="0.7" letter-spacing="0.6">OB · BEARISH · B</text>
+        </g>
+      </g>
+
+      <!-- ── Bullish OB — the star of the show — wipes on 4.6→5.3s ── -->
+      <g>
+        <rect x="64" y="280" height="24" fill="#34d399" opacity="0.14" width="0">
+          <animate attributeName="width"
+                   values="0;0;528;528;0;0"
+                   keyTimes="0;0.256;0.294;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </rect>
+        <rect x="64" y="280" height="24" fill="none" stroke="#34d399" stroke-width="1"
+              stroke-dasharray="4 3" width="0">
+          <animate attributeName="width"
+                   values="0;0;528;528;0;0"
+                   keyTimes="0;0.256;0.294;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+          <!-- zone border breathes while price trades inside it (9.0–10.1s) -->
+          <animate attributeName="stroke-opacity"
+                   values="1;1;1;0.35;1;0.35;1;1"
+                   keyTimes="0;0.50;0.511;0.522;0.533;0.544;0.556;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </rect>
+        <!-- grade tag pops after the wipe -->
+        <g opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;1;0;0"
+                   keyTimes="0;0.294;0.306;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+          <rect x="68" y="284" width="112" height="16" rx="3" fill="#0c2c1f" opacity="0.9"/>
+          <text x="74" y="296" font-family="ui-monospace, monospace" font-size="8.5"
+                font-weight="700" fill="#86efac" letter-spacing="0.6">OB · BULLISH · A 4/5</text>
+        </g>
+        <!-- detection sparkles on the zone corners -->
+        <circle cx="64" cy="280" r="2.4" fill="#86efac" filter="url(#softGlow)" opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;0;1;0;0"
+                   keyTimes="0;0.294;0.30;0.306;0.312;0.32;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="588" cy="304" r="2.4" fill="#86efac" filter="url(#softGlow)" opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;0;1;0;0"
+                   keyTimes="0;0.30;0.306;0.312;0.318;0.326;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </circle>
+      </g>
+
+      <!-- ── Position box: reward above entry, risk below (6.5s) ── -->
+      <g>
+        <rect x="380" y="196" width="212" height="84" fill="#34d399" opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;0.10;0.10;0;0"
+                   keyTimes="0;0.394;0.417;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </rect>
+        <rect x="380" y="280" width="212" height="36" fill="#f87171" opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;0.10;0.10;0;0"
+                   keyTimes="0;0.394;0.417;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </rect>
+        <!-- reward zone flashes when TP hits -->
+        <rect x="380" y="196" width="212" height="84" fill="#34d399" opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;0.30;0;0.18;0;0"
+                   keyTimes="0;0.733;0.741;0.752;0.761;0.778;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </rect>
+      </g>
+
+      <!-- ── BUY LIMIT line (draws 6.5s) ── -->
+      <g>
+        <line x1="64" y1="280" x2="586" y2="280"
+              stroke="#34d399" stroke-width="1.6" stroke-dasharray="528"
+              stroke-dashoffset="528" stroke-linecap="round">
+          <animate attributeName="stroke-dashoffset"
+                   values="528;528;0;0;528;528"
+                   keyTimes="0;0.361;0.383;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+          <!-- flashes when the limit fills (9.4s) -->
+          <animate attributeName="stroke-width"
+                   values="1.6;1.6;3.2;1.6;2.8;1.6;1.6"
+                   keyTimes="0;0.522;0.528;0.539;0.545;0.556;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </line>
+        <g opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;1;0;0"
+                   keyTimes="0;0.383;0.40;0.517;0.522;1"
+                   dur="18s" repeatCount="indefinite"/>
+          <rect x="540" y="264" width="52" height="15" rx="3" fill="#10b981" opacity="0.25"/>
+          <text x="566" y="275" font-family="ui-monospace, monospace" font-size="8.5"
+                font-weight="700" fill="#86efac" text-anchor="middle">LIMIT 2400</text>
+        </g>
+      </g>
+
+      <!-- ── TP line (draws 6.7s) ── -->
+      <g>
+        <line x1="64" y1="196" x2="586" y2="196"
+              stroke="#fbbf24" stroke-width="1.6" stroke-dasharray="528"
+              stroke-dashoffset="528" stroke-linecap="round">
+          <animate attributeName="stroke-dashoffset"
+                   values="528;528;0;0;528;528"
+                   keyTimes="0;0.372;0.394;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </line>
+        <g opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;1;0;0"
+                   keyTimes="0;0.394;0.411;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+          <rect x="546" y="180" width="44" height="15" rx="3" fill="#f59e0b" opacity="0.25">
+            <!-- tag flashes on the hit -->
+            <animate attributeName="opacity"
+                     values="0.25;0.25;0.9;0.25;0.7;0.25;0.25"
+                     keyTimes="0;0.733;0.739;0.75;0.756;0.767;1"
+                     dur="18s" repeatCount="indefinite"/>
+          </rect>
+          <text x="568" y="191" font-family="ui-monospace, monospace" font-size="8.5"
+                font-weight="700" fill="#fde68a" text-anchor="middle">TP 2430</text>
+        </g>
+      </g>
+
+      <!-- ── SL line (draws 6.9s) ── -->
+      <g>
+        <line x1="64" y1="316" x2="586" y2="316"
+              stroke="#f87171" stroke-width="1.4" stroke-dasharray="528"
+              stroke-dashoffset="528" stroke-linecap="round">
+          <animate attributeName="stroke-dashoffset"
+                   values="528;528;0;0;528;528"
+                   keyTimes="0;0.383;0.406;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+        </line>
+        <g opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;1;0;0"
+                   keyTimes="0;0.406;0.422;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+          <rect x="548" y="300" width="42" height="15" rx="3" fill="#ef4444" opacity="0.22"/>
+          <text x="569" y="311" font-family="ui-monospace, monospace" font-size="8.5"
+                font-weight="700" fill="#fca5a5" text-anchor="middle">SL 2385</text>
+        </g>
+      </g>
+
+      <!-- ── Retrace candles: price walks down into the zone ── -->
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.40;0.417;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
         <animateTransform attributeName="transform" type="translate"
-                          values="0,0; -26,0" dur="1.8s" repeatCount="indefinite"/>
-        <g color="#34d399"><use href="#cU" x="84"  y="290"/></g>
-        <g color="#34d399"><use href="#cU" x="110" y="280"/></g>
-        <g color="#f87171"><use href="#cD" x="136" y="288"/></g>
-        <g color="#34d399"><use href="#cU" x="162" y="270"/></g>
-        <g color="#34d399"><use href="#cU" x="188" y="260"/></g>
-        <g color="#f87171"><use href="#cD" x="214" y="268"/></g>
-        <g color="#34d399"><use href="#cU" x="240" y="258"/></g>
-        <g color="#34d399"><use href="#cU" x="266" y="246"/></g>
-        <g color="#34d399"><use href="#cU" x="292" y="236"/></g>
-        <g color="#f87171"><use href="#cD" x="318" y="246"/></g>
-        <g color="#34d399"><use href="#cU" x="344" y="240"/></g>
-        <g color="#34d399"><use href="#cU" x="370" y="228"/></g>
-        <g color="#34d399"><use href="#cU" x="396" y="218"/></g>
-        <g color="#f87171"><use href="#cD" x="422" y="226"/></g>
-        <g color="#34d399"><use href="#cU" x="448" y="220"/></g>
-        <g color="#34d399"><use href="#cU" x="474" y="208"/></g>
-        <g color="#34d399"><use href="#cU" x="500" y="198"/></g>
-        <g color="#34d399"><use href="#cU" x="526" y="190"/></g>
-        <g color="#f87171"><use href="#cD" x="552" y="198"/></g>
+                          values="0,-8;0,-8;0,0;0,0" keyTimes="0;0.40;0.417;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#f87171"><use href="#cD" x="324" y="244"/></g>
+      </g>
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.439;0.456;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,-8;0,-8;0,0;0,0" keyTimes="0;0.439;0.456;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#f87171"><use href="#cD" x="348" y="258"/></g>
+      </g>
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.478;0.494;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,-8;0,-8;0,0;0,0" keyTimes="0;0.478;0.494;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#f87171"><use href="#cD" x="372" y="270"/></g>
+      </g>
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.522;0.539;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,-8;0,-8;0,0;0,0" keyTimes="0;0.522;0.539;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#f87171"><use href="#cD" x="396" y="281"/></g>
       </g>
 
-      <!-- ============ AI overlays — only appear AFTER 8s ============= -->
-
-      <!-- Resistance line: draws on 8.4s–9.2s -->
-      <g>
-        <line x1="64" y1="186" x2="586" y2="186"
-              stroke="#a78bfa" stroke-width="1.6" stroke-dasharray="528"
-              stroke-dashoffset="528" stroke-linecap="round">
-          <animate attributeName="stroke-dashoffset"
-                   values="528;528;0;0;528"
-                   keyTimes="0;0.6;0.657;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-        </line>
-        <g opacity="0">
-          <animate attributeName="opacity"
-                   values="0;0;1;1;0"
-                   keyTimes="0;0.657;0.685;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-          <rect x="552" y="176" width="40" height="18" rx="3" fill="#a78bfa" opacity="0.22"/>
-          <text x="572" y="189" font-family="ui-monospace, monospace" font-size="9"
-                font-weight="700" fill="#c4b5fd" text-anchor="middle">R1 2432</text>
-        </g>
+      <!-- ── Rally candles: off the zone and up into TP ── -->
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.561;0.578;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,8;0,8;0,0;0,0" keyTimes="0;0.561;0.578;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#34d399"><use href="#cU" x="420" y="270"/></g>
+      </g>
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.594;0.611;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,8;0,8;0,0;0,0" keyTimes="0;0.594;0.611;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#34d399"><use href="#cU" x="444" y="254"/></g>
+      </g>
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.628;0.644;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,8;0,8;0,0;0,0" keyTimes="0;0.628;0.644;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#34d399"><use href="#cU" x="468" y="238"/></g>
+      </g>
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.661;0.678;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,8;0,8;0,0;0,0" keyTimes="0;0.661;0.678;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#34d399"><use href="#cU" x="492" y="222"/></g>
+      </g>
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.694;0.711;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,8;0,8;0,0;0,0" keyTimes="0;0.694;0.711;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#34d399"><use href="#cU" x="516" y="208"/></g>
+      </g>
+      <g opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.728;0.744;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,8;0,8;0,0;0,0" keyTimes="0;0.728;0.744;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <g color="#34d399"><use href="#cU" x="540" y="197"/></g>
       </g>
 
-      <!-- Support line: draws on 8.6s–9.4s -->
-      <g>
-        <line x1="64" y1="304" x2="586" y2="304"
-              stroke="#a78bfa" stroke-width="1.6" stroke-dasharray="528"
-              stroke-dashoffset="528" stroke-linecap="round">
-          <animate attributeName="stroke-dashoffset"
-                   values="528;528;0;0;528"
-                   keyTimes="0;0.614;0.671;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-        </line>
-        <g opacity="0">
-          <animate attributeName="opacity"
-                   values="0;0;1;1;0"
-                   keyTimes="0;0.671;0.7;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-          <rect x="552" y="294" width="40" height="18" rx="3" fill="#a78bfa" opacity="0.22"/>
-          <text x="572" y="307" font-family="ui-monospace, monospace" font-size="9"
-                font-weight="700" fill="#c4b5fd" text-anchor="middle">S1 2398</text>
-        </g>
-      </g>
+      <!-- ── Live price dot riding the closes ── -->
+      <circle r="3.6" fill="#fde68a" filter="url(#hugeGlow)" opacity="0">
+        <animate attributeName="opacity"
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.361;0.372;0.767;0.794;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <animateMotion dur="18s" repeatCount="indefinite"
+                       keyPoints="0;0;0.1;0.2;0.3;0.4;0.5;0.6;0.7;0.8;0.9;1;1"
+                       keyTimes="0;0.361;0.40;0.439;0.478;0.522;0.561;0.594;0.628;0.661;0.694;0.728;1"
+                       path="M300 226 L324 244 L348 258 L372 270 L396 281 L420 270 L444 254 L468 238 L492 222 L516 208 L540 197"/>
+      </circle>
+    </g>
 
-      <!-- FVG zone: fades in 9.0s–10.0s -->
+    <!-- ── FILL ripple + toast (outside the clip so it can breathe) ── -->
+    <g>
+      <circle cx="396" cy="280" r="0" fill="none" stroke="#34d399" stroke-width="2" opacity="0">
+        <animate attributeName="r"
+                 values="0;0;10;30;0;0"
+                 keyTimes="0;0.522;0.528;0.545;0.546;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <animate attributeName="opacity"
+                 values="0;0;0.9;0;0;0"
+                 keyTimes="0;0.522;0.528;0.545;0.546;1"
+                 dur="18s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="396" cy="280" r="0" fill="none" stroke="#86efac" stroke-width="1.4" opacity="0">
+        <animate attributeName="r"
+                 values="0;0;12;36;0;0"
+                 keyTimes="0;0.533;0.539;0.558;0.559;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <animate attributeName="opacity"
+                 values="0;0;0.7;0;0;0"
+                 keyTimes="0;0.533;0.539;0.558;0.559;1"
+                 dur="18s" repeatCount="indefinite"/>
+      </circle>
       <g opacity="0">
         <animate attributeName="opacity"
-                 values="0;0;0.6;0.6;0"
-                 keyTimes="0;0.643;0.714;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        <rect x="320" y="236" width="180" height="32" fill="#a78bfa" opacity="0.20"/>
-        <rect x="320" y="236" width="180" height="32" fill="none" stroke="#a78bfa"
-              stroke-width="0.8" stroke-dasharray="3 3"/>
-        <text x="326" y="252" font-family="ui-monospace, monospace" font-size="8"
-              font-weight="700" fill="#c4b5fd" letter-spacing="0.6">FVG · BULLISH</text>
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.522;0.535;0.939;0.972;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,6;0,6;0,0;0,0" keyTimes="0;0.522;0.535;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <rect x="330" y="290" width="60" height="17" rx="4" fill="#0c2c1f" opacity="0.95"
+              stroke="#34d399" stroke-width="0.8"/>
+        <text x="360" y="302" font-family="ui-monospace, monospace" font-size="9"
+              font-weight="700" fill="#86efac" text-anchor="middle">FILLED ✓</text>
       </g>
+    </g>
 
-      <!-- ENTRY marker: 9.5s -->
+    <!-- ── TP HIT: ring burst + confetti + result chip ── -->
+    <g>
+      <circle cx="540" cy="196" r="0" fill="none" stroke="#fbbf24" stroke-width="2.4" opacity="0">
+        <animate attributeName="r"
+                 values="0;0;18;52;0;0"
+                 keyTimes="0;0.733;0.741;0.761;0.762;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <animate attributeName="opacity"
+                 values="0;0;0.9;0;0;0"
+                 keyTimes="0;0.733;0.741;0.761;0.762;1"
+                 dur="18s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="540" cy="196" r="0" fill="none" stroke="#34d399" stroke-width="1.6" opacity="0">
+        <animate attributeName="r"
+                 values="0;0;22;64;0;0"
+                 keyTimes="0;0.741;0.75;0.772;0.773;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <animate attributeName="opacity"
+                 values="0;0;0.7;0;0;0"
+                 keyTimes="0;0.741;0.75;0.772;0.773;1"
+                 dur="18s" repeatCount="indefinite"/>
+      </circle>
+
+      <!-- confetti -->
+      <circle r="2.6" fill="#fbbf24" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0"
+                 keyTimes="0;0.733;0.744;0.794;1" dur="18s" repeatCount="indefinite"/>
+        <animateMotion keyPoints="0;0;1;1" keyTimes="0;0.733;0.794;1"
+                       dur="18s" repeatCount="indefinite" path="M540 196 q-26 -38 -44 -50"/>
+      </circle>
+      <circle r="2.2" fill="#34d399" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0"
+                 keyTimes="0;0.736;0.747;0.797;1" dur="18s" repeatCount="indefinite"/>
+        <animateMotion keyPoints="0;0;1;1" keyTimes="0;0.736;0.797;1"
+                       dur="18s" repeatCount="indefinite" path="M540 196 q10 -44 26 -54"/>
+      </circle>
+      <circle r="2.4" fill="#a78bfa" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0"
+                 keyTimes="0;0.739;0.75;0.80;1" dur="18s" repeatCount="indefinite"/>
+        <animateMotion keyPoints="0;0;1;1" keyTimes="0;0.739;0.80;1"
+                       dur="18s" repeatCount="indefinite" path="M540 196 q34 -26 48 -20"/>
+      </circle>
+      <circle r="2" fill="#fde68a" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0"
+                 keyTimes="0;0.741;0.752;0.803;1" dur="18s" repeatCount="indefinite"/>
+        <animateMotion keyPoints="0;0;1;1" keyTimes="0;0.741;0.803;1"
+                       dur="18s" repeatCount="indefinite" path="M540 196 q-40 -14 -56 -4"/>
+      </circle>
+      <circle r="2" fill="#86efac" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0"
+                 keyTimes="0;0.744;0.755;0.806;1" dur="18s" repeatCount="indefinite"/>
+        <animateMotion keyPoints="0;0;1;1" keyTimes="0;0.744;0.806;1"
+                       dur="18s" repeatCount="indefinite" path="M540 196 q22 26 40 30"/>
+      </circle>
+      <circle r="1.8" fill="#f0abfc" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0"
+                 keyTimes="0;0.747;0.758;0.808;1" dur="18s" repeatCount="indefinite"/>
+        <animateMotion keyPoints="0;0;1;1" keyTimes="0;0.747;0.808;1"
+                       dur="18s" repeatCount="indefinite" path="M540 196 q-14 30 -30 38"/>
+      </circle>
+
+      <!-- result chip -->
       <g opacity="0">
         <animate attributeName="opacity"
-                 values="0;0;1;1;0"
-                 keyTimes="0;0.678;0.714;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        <line x1="500" y1="252" x2="540" y2="252" stroke="#34d399" stroke-width="1.6"
-              stroke-linecap="round"/>
-        <polygon points="500,252 508,248 508,256" fill="#34d399"/>
-        <rect x="542" y="244" width="48" height="16" rx="3" fill="#10b981" opacity="0.25"/>
-        <text x="566" y="255" font-family="ui-monospace, monospace" font-size="9"
-              font-weight="700" fill="#86efac" text-anchor="middle">ENTRY</text>
-      </g>
-
-      <!-- SL marker: 9.7s -->
-      <g opacity="0">
-        <animate attributeName="opacity"
-                 values="0;0;1;1;0"
-                 keyTimes="0;0.692;0.728;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        <line x1="500" y1="296" x2="540" y2="296" stroke="#f87171" stroke-width="1.6"
-              stroke-linecap="round"/>
-        <polygon points="500,296 508,292 508,300" fill="#f87171"/>
-        <rect x="542" y="288" width="34" height="16" rx="3" fill="#ef4444" opacity="0.22"/>
-        <text x="559" y="299" font-family="ui-monospace, monospace" font-size="9"
-              font-weight="700" fill="#fca5a5" text-anchor="middle">SL</text>
-      </g>
-
-      <!-- TP marker: 9.9s -->
-      <g opacity="0">
-        <animate attributeName="opacity"
-                 values="0;0;1;1;0"
-                 keyTimes="0;0.707;0.742;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        <line x1="500" y1="196" x2="540" y2="196" stroke="#fbbf24" stroke-width="1.6"
-              stroke-linecap="round"/>
-        <polygon points="500,196 508,192 508,200" fill="#fbbf24"/>
-        <rect x="542" y="188" width="34" height="16" rx="3" fill="#f59e0b" opacity="0.22"/>
-        <text x="559" y="199" font-family="ui-monospace, monospace" font-size="9"
-              font-weight="700" fill="#fde68a" text-anchor="middle">TP</text>
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.744;0.758;0.939;0.972;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="translate"
+                          values="0,10;0,10;0,0;0,0" keyTimes="0;0.744;0.758;1"
+                          dur="18s" repeatCount="indefinite"/>
+        <rect x="404" y="140" width="128" height="22" rx="11" fill="#0c2c1f" opacity="0.95"
+              stroke="#34d399" stroke-width="1" filter="url(#softGlow)"/>
+        <text x="468" y="155" font-family="ui-monospace, monospace" font-size="10.5"
+              font-weight="700" fill="#86efac" text-anchor="middle">TP HIT  +$204 · +2.0R</text>
       </g>
     </g>
 
@@ -268,28 +571,28 @@
     <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="700"
        letter-spacing="0.6">
       <g transform="translate(64,384)">
-        <rect width="58" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
-        <text x="29" y="13" fill="#c4b5fd" text-anchor="middle">RSI 14</text>
+        <rect width="76" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
+        <text x="38" y="13" fill="#86efac" text-anchor="middle">RANKED OB</text>
       </g>
-      <g transform="translate(130,384)">
-        <rect width="52" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
-        <text x="26" y="13" fill="#67e8f9" text-anchor="middle">MACD</text>
+      <g transform="translate(148,384)">
+        <rect width="42" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
+        <text x="21" y="13" fill="#67e8f9" text-anchor="middle">FVG</text>
       </g>
-      <g transform="translate(190,384)">
-        <rect width="58" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
-        <text x="29" y="13" fill="#fbbf24" text-anchor="middle">UT BOT</text>
+      <g transform="translate(198,384)">
+        <rect width="86" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
+        <text x="43" y="13" fill="#fdba74" text-anchor="middle">VOL PROFILE</text>
       </g>
-      <g transform="translate(256,384)">
-        <rect width="58" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
-        <text x="29" y="13" fill="#86efac" text-anchor="middle">EMA 50</text>
+      <g transform="translate(292,384)">
+        <rect width="70" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
+        <text x="35" y="13" fill="#c4b5fd" text-anchor="middle">ICHIMOKU</text>
       </g>
-      <g transform="translate(322,384)">
-        <rect width="62" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
-        <text x="31" y="13" fill="#fdba74" text-anchor="middle">BBANDS</text>
+      <g transform="translate(370,384)">
+        <rect width="54" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
+        <text x="27" y="13" fill="#fbbf24" text-anchor="middle">RSI 14</text>
       </g>
-      <g transform="translate(392,384)">
-        <rect width="60" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
-        <text x="30" y="13" fill="#f0abfc" text-anchor="middle">STOCH</text>
+      <g transform="translate(432,384)">
+        <rect width="56" height="20" rx="4" fill="#1e2a4a" stroke="#2e3d6b" stroke-width="0.8"/>
+        <text x="28" y="13" fill="#f0abfc" text-anchor="middle">UT BOT</text>
       </g>
       <g transform="translate(508,384)">
         <rect width="84" height="20" rx="10" fill="#3b4a7a" opacity="0.4" stroke="#a78bfa"
@@ -299,58 +602,74 @@
       </g>
     </g>
 
-    <!-- Card footer: shimmer 0–7s, "AWAITING APPLY" 7–8s, full trade summary 8s–13s -->
+    <!-- Card footer: shimmer → order ticket → position → result -->
     <g transform="translate(58,420)">
       <rect width="540" height="40" rx="8" fill="#0f1a36" stroke="#1f2c52" stroke-width="0.8"/>
       <text x="14" y="17" font-family="ui-sans-serif, system-ui, sans-serif"
             font-size="9" font-weight="700" letter-spacing="1" fill="#7c8ba8">
-        AI PLAN
+        ORDER
       </text>
 
-      <!-- shimmer while analysis is running (0–7s) -->
+      <!-- shimmer while scanning (0–6.5s) -->
       <g>
-        <animate attributeName="opacity" values="1;1;0;0;1"
-                 keyTimes="0;0.485;0.515;0.964;1"
-                 dur="14s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="1;1;0;0;1;1"
+                 keyTimes="0;0.35;0.372;0.96;0.985;1"
+                 dur="18s" repeatCount="indefinite"/>
         <rect x="14" y="22" width="240" height="6" rx="3" fill="#1e2a4a"/>
         <rect x="14" y="22" width="80" height="6" rx="3" fill="#3b4a7a">
           <animate attributeName="x" values="14;174;14" dur="1.4s" repeatCount="indefinite"/>
         </rect>
       </g>
 
-      <!-- "Awaiting apply" hint 7–8s -->
+      <!-- order ticket (6.7–9.4s) -->
       <g opacity="0">
         <animate attributeName="opacity"
                  values="0;0;1;1;0;0"
-                 keyTimes="0;0.5;0.515;0.555;0.575;1"
-                 dur="14s" repeatCount="indefinite"/>
-        <text x="62" y="27" font-family="ui-sans-serif, system-ui, sans-serif"
-              font-size="11" font-weight="700" fill="#c4b5fd" letter-spacing="0.4">
-          AWAITING APPLY  →  CLICK "APPLY TO CHART" IN PANEL
-        </text>
+                 keyTimes="0;0.372;0.389;0.517;0.522;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <text x="62" y="27" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="11" font-weight="700" fill="#86efac">BUY LIMIT</text>
+        <text x="134" y="27" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="11" fill="#cbd5e1">@ 2400  ·  SL 2385  ·  TP 2430  ·  0.13 lots</text>
       </g>
 
-      <!-- Full trade plan appears AFTER overlays land (8.2s+) -->
+      <!-- position open (9.4–13.2s) -->
       <g opacity="0">
         <animate attributeName="opacity"
-                 values="0;0;1;1;0"
-                 keyTimes="0;0.585;0.625;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.522;0.539;0.728;0.733;1"
+                 dur="18s" repeatCount="indefinite"/>
         <text x="62" y="27" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-              font-size="11" font-weight="700" fill="#86efac">LONG</text>
-        <text x="100" y="27" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-              font-size="11" fill="#cbd5e1">@ 2410  ·  SL 2398  ·  TP 2432</text>
+              font-size="11" font-weight="700" fill="#86efac">LONG OPEN</text>
+        <text x="142" y="27" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="11" fill="#cbd5e1">@ 2400  ·  risking $100 (1%)</text>
+      </g>
+
+      <!-- result (13.2s+) -->
+      <g opacity="0">
+        <animate attributeName="opacity"
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.733;0.75;0.939;0.972;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <text x="62" y="27" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="11" font-weight="700" fill="#4ade80">WIN  +$204  ·  +2.04R  ·  TP 2430 ✓</text>
+      </g>
+
+      <!-- chips: grade + R:R, appear with the ticket and persist -->
+      <g opacity="0">
+        <animate attributeName="opacity"
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.372;0.389;0.939;0.972;1"
+                 dur="18s" repeatCount="indefinite"/>
         <g transform="translate(420,16)">
-          <rect width="60" height="18" rx="9" fill="#1d3a2e" stroke="#22c55e"
-                stroke-width="0.6"/>
-          <text x="30" y="12" font-family="ui-monospace, monospace" font-size="9"
-                font-weight="700" fill="#86efac" text-anchor="middle">R:R 1:1.8</text>
+          <rect width="58" height="18" rx="9" fill="#1d3a2e" stroke="#22c55e" stroke-width="0.6"/>
+          <text x="29" y="12" font-family="ui-monospace, monospace" font-size="9"
+                font-weight="700" fill="#86efac" text-anchor="middle">R:R 1:2.0</text>
         </g>
-        <g transform="translate(486,16)">
-          <rect width="54" height="18" rx="9" fill="#2a1d3a" stroke="#a78bfa"
-                stroke-width="0.6"/>
-          <text x="27" y="12" font-family="ui-monospace, monospace" font-size="9"
-                font-weight="700" fill="#c4b5fd" text-anchor="middle">CONF 78%</text>
+        <g transform="translate(484,16)">
+          <rect width="56" height="18" rx="9" fill="#2a1d3a" stroke="#a78bfa" stroke-width="0.6"/>
+          <text x="28" y="12" font-family="ui-monospace, monospace" font-size="9"
+                font-weight="700" fill="#c4b5fd" text-anchor="middle">OB A 4/5</text>
         </g>
       </g>
     </g>
@@ -362,13 +681,13 @@
   <g>
     <rect x="636" y="80" width="284" height="400" rx="14" fill="url(#card)"
           stroke="#2e3a63" stroke-width="1.2"/>
-    <!-- Panel border glows purple while AI is active (2s–7s) -->
+    <!-- Panel border glows while the AI is scanning (2–5.3s) -->
     <rect x="636" y="80" width="284" height="400" rx="14" fill="none" stroke="#a78bfa"
           stroke-width="1.2" opacity="0">
       <animate attributeName="opacity"
                values="0;0;0.45;0.45;0;0"
-               keyTimes="0;0.143;0.2;0.5;0.55;1"
-               dur="14s" repeatCount="indefinite"/>
+               keyTimes="0;0.111;0.144;0.283;0.311;1"
+               dur="18s" repeatCount="indefinite"/>
     </rect>
 
     <!-- Header -->
@@ -382,49 +701,59 @@
       <text x="36" y="12" font-family="ui-sans-serif, system-ui, sans-serif"
             font-size="12" font-weight="700" fill="#f3f4f6">Claude Code</text>
 
-      <!-- Status text: cycles IDLE → ANALYSING → PLAN READY → APPLIED -->
+      <!-- Status: IDLE → SCANNING → OB FOUND → LIMIT PLACED → LONG OPEN → TP HIT -->
       <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="700"
          letter-spacing="0.6">
-        <!-- IDLE (0–2s) -->
         <text x="36" y="24" fill="#7c8ba8" opacity="0">
           <animate attributeName="opacity"
-                   values="1;1;0;0;1"
-                   keyTimes="0;0.13;0.143;0.964;1"
-                   dur="14s" repeatCount="indefinite"/>
+                   values="1;1;0;0;1;1"
+                   keyTimes="0;0.10;0.111;0.96;0.985;1"
+                   dur="18s" repeatCount="indefinite"/>
           IDLE
         </text>
-        <!-- ANALYSING (2–7s) -->
         <text x="36" y="24" fill="#c4b5fd" opacity="0">
           <animate attributeName="opacity"
                    values="0;0;1;1;0;0"
-                   keyTimes="0;0.143;0.16;0.485;0.5;1"
-                   dur="14s" repeatCount="indefinite"/>
-          ANALYSING CHART…
+                   keyTimes="0;0.111;0.122;0.289;0.30;1"
+                   dur="18s" repeatCount="indefinite"/>
+          SCANNING STRUCTURE…
         </text>
-        <!-- PLAN READY (7–8s) -->
+        <text x="36" y="24" fill="#86efac" opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;1;0;0"
+                   keyTimes="0;0.30;0.311;0.35;0.361;1"
+                   dur="18s" repeatCount="indefinite"/>
+          ORDER BLOCK FOUND · A 4/5
+        </text>
         <text x="36" y="24" fill="#fde68a" opacity="0">
           <animate attributeName="opacity"
                    values="0;0;1;1;0;0"
-                   keyTimes="0;0.5;0.515;0.555;0.57;1"
-                   dur="14s" repeatCount="indefinite"/>
-          PLAN READY  ·  78% CONFIDENCE
+                   keyTimes="0;0.361;0.372;0.517;0.522;1"
+                   dur="18s" repeatCount="indefinite"/>
+          LIMIT PLACED @ 2400 · WAITING
         </text>
-        <!-- APPLIED TO CHART (8–13s) -->
         <text x="36" y="24" fill="#86efac" opacity="0">
           <animate attributeName="opacity"
-                   values="0;0;1;1;0"
-                   keyTimes="0;0.57;0.585;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-          APPLIED TO CHART  ✓
+                   values="0;0;1;1;0;0"
+                   keyTimes="0;0.522;0.533;0.728;0.733;1"
+                   dur="18s" repeatCount="indefinite"/>
+          FILLED · LONG OPEN
+        </text>
+        <text x="36" y="24" fill="#4ade80" opacity="0">
+          <animate attributeName="opacity"
+                   values="0;0;1;1;0;0"
+                   keyTimes="0;0.733;0.744;0.939;0.972;1"
+                   dur="18s" repeatCount="indefinite"/>
+          TP HIT ✓  +2.0R
         </text>
       </g>
 
-      <!-- Spinner during analyse (2–7s) -->
+      <!-- Spinner while scanning -->
       <g transform="translate(248,14)" opacity="0">
         <animate attributeName="opacity"
                  values="0;0;1;1;0;0"
-                 keyTimes="0;0.143;0.16;0.485;0.5;1"
-                 dur="14s" repeatCount="indefinite"/>
+                 keyTimes="0;0.111;0.122;0.289;0.30;1"
+                 dur="18s" repeatCount="indefinite"/>
         <circle cx="0" cy="0" r="7" fill="none" stroke="#3b4a7a" stroke-width="2"/>
         <path d="M 0 -7 A 7 7 0 0 1 7 0" fill="none" stroke="#a78bfa" stroke-width="2"
               stroke-linecap="round">
@@ -433,229 +762,179 @@
         </path>
       </g>
 
-      <!-- Checkmark after applied (8s onward) -->
+      <!-- Checkmark after TP -->
       <g transform="translate(248,14)" opacity="0">
         <animate attributeName="opacity"
-                 values="0;0;1;1;0"
-                 keyTimes="0;0.57;0.585;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.733;0.744;0.939;0.972;1"
+                 dur="18s" repeatCount="indefinite"/>
         <circle cx="0" cy="0" r="8" fill="#10b981" opacity="0.3"/>
         <path d="M -4 0 L -1 3 L 4 -3" stroke="#86efac" stroke-width="2"
               fill="none" stroke-linecap="round" stroke-linejoin="round"/>
       </g>
     </g>
 
-    <!-- Markdown body (each line fades in as a typewriter, completes by 7s) -->
+    <!-- Markdown body: the OB read, streamed line by line -->
     <g transform="translate(650,140)"
        font-family="ui-sans-serif, system-ui, sans-serif" fill="#cbd5e1">
 
-      <!-- ## Setup -->
       <text font-size="11" font-weight="800" fill="#a78bfa" y="0" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.225;0.245;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        ## Setup
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.130;0.144;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        ## Structure
       </text>
       <text font-size="10.5" y="18" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.245;0.265;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        Bullish FVG holds; price is
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.148;0.162;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        Impulse off 2 390 left a
       </text>
       <text font-size="10.5" y="33" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.265;0.285;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        coiling above S1 with rising
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.166;0.180;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        bullish order block at
       </text>
       <text font-size="10.5" y="48" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.285;0.305;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        EMA-50 and RSI&gt;52.
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.184;0.198;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        2 390 – 2 400 · graded A 4/5.
       </text>
 
-      <!-- ## Bias -->
       <text font-size="11" font-weight="800" fill="#a78bfa" y="74" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.31;0.33;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        ## Bias
-      </text>
-      <text font-size="10.5" y="92" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.33;0.35;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        Bullish — buy the FVG retest
-      </text>
-      <text font-size="10.5" y="107" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.35;0.37;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        into R1.
-      </text>
-
-      <!-- ## Plan -->
-      <text font-size="11" font-weight="800" fill="#a78bfa" y="133" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.375;0.395;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.205;0.219;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
         ## Plan
       </text>
       <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">
-        <text y="153" opacity="0">
-          <animate attributeName="opacity" values="0;0;1;1;0"
-                   keyTimes="0;0.395;0.415;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-          <tspan fill="#86efac" font-weight="700">Entry</tspan>
-          <tspan dx="4" fill="#cbd5e1">$2 410</tspan>
+        <text y="94" opacity="0">
+          <animate attributeName="opacity" values="0;0;1;1;0;0"
+                   keyTimes="0;0.222;0.236;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+          <tspan fill="#86efac" font-weight="700">Limit</tspan>
+          <tspan dx="6" fill="#cbd5e1">2 400 · at OB top</tspan>
         </text>
-        <text y="170" opacity="0">
-          <animate attributeName="opacity" values="0;0;1;1;0"
-                   keyTimes="0;0.415;0.435;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-          <tspan fill="#fca5a5" font-weight="700">Stop</tspan>
-          <tspan dx="10" fill="#cbd5e1">$2 398</tspan>
+        <text y="111" opacity="0">
+          <animate attributeName="opacity" values="0;0;1;1;0;0"
+                   keyTimes="0;0.240;0.254;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+          <tspan fill="#fca5a5" font-weight="700">SL</tspan>
+          <tspan dx="6" fill="#cbd5e1">2 385</tspan>
+          <tspan dx="10" fill="#fde68a" font-weight="700">TP</tspan>
+          <tspan dx="6" fill="#cbd5e1">2 430 · 2.0R</tspan>
         </text>
-        <text y="187" opacity="0">
-          <animate attributeName="opacity" values="0;0;1;1;0"
-                   keyTimes="0;0.435;0.455;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-          <tspan fill="#fde68a" font-weight="700">TP1</tspan>
-          <tspan dx="14" fill="#cbd5e1">$2 425</tspan>
-        </text>
-        <text y="204" opacity="0">
-          <animate attributeName="opacity" values="0;0;1;1;0"
-                   keyTimes="0;0.455;0.475;0.928;0.971"
-                   dur="14s" repeatCount="indefinite"/>
-          <tspan fill="#fde68a" font-weight="700">TP2</tspan>
-          <tspan dx="14" fill="#cbd5e1">$2 432</tspan>
+        <text y="128" opacity="0">
+          <animate attributeName="opacity" values="0;0;1;1;0;0"
+                   keyTimes="0;0.258;0.272;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+          <tspan fill="#c4b5fd" font-weight="700">Size</tspan>
+          <tspan dx="6" fill="#cbd5e1">1% risk → 0.13 lots</tspan>
         </text>
       </g>
 
-      <!-- ## Risk -->
-      <text font-size="11" font-weight="800" fill="#a78bfa" y="230" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.48;0.5;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        ## Risk
+      <text font-size="11" font-weight="800" fill="#a78bfa" y="154" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.272;0.286;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        ## Watch
       </text>
-      <text font-size="10.5" y="248" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.49;0.51;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        Invalidates on H1 close
+      <text font-size="10.5" y="172" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.279;0.293;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        Invalidate on H1 close
       </text>
-      <text font-size="10.5" y="263" opacity="0">
-        <animate attributeName="opacity" values="0;0;1;1;0"
-                 keyTimes="0;0.5;0.52;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        below 2 398.
+      <text font-size="10.5" y="187" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;1;0;0"
+                 keyTimes="0;0.286;0.30;0.939;0.972;1" dur="18s" repeatCount="indefinite"/>
+        below 2 385.
       </text>
 
-      <!-- Blinking cursor — only blinks while streaming (2–7s) -->
-      <rect x="0" y="266" width="6" height="12" fill="#a78bfa" opacity="0">
+      <!-- Blinking cursor while streaming -->
+      <rect x="0" y="190" width="6" height="12" fill="#a78bfa" opacity="0">
         <animate attributeName="opacity"
                  values="0;0;1;0;1;0;1;0;1;0;0;0"
-                 keyTimes="0;0.16;0.22;0.28;0.32;0.38;0.42;0.46;0.48;0.5;0.52;1"
-                 dur="14s" repeatCount="indefinite"/>
+                 keyTimes="0;0.13;0.15;0.17;0.19;0.21;0.23;0.25;0.27;0.29;0.30;1"
+                 dur="18s" repeatCount="indefinite"/>
       </rect>
     </g>
 
-    <!-- ────────── Action buttons (appear 7s, "click" 7.5s) ────────── -->
+    <!-- ── Action buttons: PLACE LIMIT pulses then presses at 6s ── -->
     <g transform="translate(650,432)" font-family="ui-sans-serif, system-ui, sans-serif"
        font-size="9" font-weight="700" letter-spacing="0.6">
 
-      <!-- APPLY TO CHART — appears 7s, pulses, "presses" at 7.7s -->
       <g opacity="0">
         <animate attributeName="opacity"
-                 values="0;0;1;1;0"
-                 keyTimes="0;0.5;0.515;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        <!-- Pulse halo behind the button (7–7.7s) -->
-        <rect x="-4" y="-4" width="132" height="36" rx="8" fill="#a78bfa" opacity="0">
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.30;0.311;0.939;0.972;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <!-- pulse halo -->
+        <rect x="-4" y="-4" width="140" height="36" rx="8" fill="#34d399" opacity="0">
           <animate attributeName="opacity"
                    values="0;0;0.35;0;0.35;0;0"
-                   keyTimes="0;0.515;0.535;0.545;0.555;0.565;1"
-                   dur="14s" repeatCount="indefinite"/>
-          <animate attributeName="width"
-                   values="124;132;140;132;140;132;124"
-                   keyTimes="0;0.5;0.535;0.545;0.555;0.565;1"
-                   dur="14s" repeatCount="indefinite"/>
+                   keyTimes="0;0.311;0.317;0.322;0.328;0.333;1"
+                   dur="18s" repeatCount="indefinite"/>
         </rect>
-        <!-- Button body — normal then "pressed" (slight scale + lighter fill) at 7.7s -->
-        <rect width="124" height="28" rx="6" fill="#10b981" opacity="0.20"
+        <rect width="132" height="28" rx="6" fill="#10b981" opacity="0.20"
               stroke="#34d399" stroke-width="0.8">
           <animate attributeName="opacity"
-                   values="0.20;0.20;0.40;0.20"
-                   keyTimes="0;0.55;0.57;0.585"
-                   dur="14s" repeatCount="indefinite"/>
+                   values="0.20;0.20;0.45;0.20;0.20"
+                   keyTimes="0;0.328;0.334;0.345;1"
+                   dur="18s" repeatCount="indefinite"/>
         </rect>
-        <text x="62" y="18" fill="#86efac" text-anchor="middle">APPLY TO CHART</text>
+        <text x="66" y="18" fill="#86efac" text-anchor="middle">PLACE LIMIT ORDER</text>
       </g>
 
-      <!-- OPEN PAPER TRADE — also appears 7s -->
-      <g transform="translate(134,0)" opacity="0">
+      <g transform="translate(142,0)" opacity="0">
         <animate attributeName="opacity"
-                 values="0;0;1;1;0"
-                 keyTimes="0;0.51;0.525;0.928;0.971"
-                 dur="14s" repeatCount="indefinite"/>
-        <rect width="136" height="28" rx="6" fill="#1e2a4a" stroke="#3b4a7a"
-              stroke-width="0.8"/>
-        <text x="68" y="18" fill="#c4b5fd" text-anchor="middle">OPEN PAPER TRADE</text>
+                 values="0;0;1;1;0;0"
+                 keyTimes="0;0.311;0.322;0.939;0.972;1"
+                 dur="18s" repeatCount="indefinite"/>
+        <rect width="128" height="28" rx="6" fill="#1e2a4a" stroke="#3b4a7a" stroke-width="0.8"/>
+        <text x="64" y="18" fill="#c4b5fd" text-anchor="middle">TRACK IN JOURNAL</text>
       </g>
     </g>
   </g>
 
   <!-- ────────────────────────────────────────────────────────────── -->
-  <!--    TRANSFER BEAT — particles fly from APPLY button to chart     -->
-  <!--    fires 7.7s–8.2s, lands and triggers overlays                 -->
+  <!--   TRANSFER BEAT — order particles fly from the button to the    -->
+  <!--   entry zone (6.0–6.5s), then the limit line draws              -->
   <!-- ────────────────────────────────────────────────────────────── -->
   <g>
-    <!-- Particle 1 — bursts from APPLY button (~712, 446) to chart center-left -->
-    <circle r="3.5" fill="#a78bfa" filter="url(#hugeGlow)" opacity="0">
+    <circle r="3.5" fill="#34d399" filter="url(#hugeGlow)" opacity="0">
       <animate attributeName="opacity"
                values="0;0;1;1;0;0"
-               keyTimes="0;0.55;0.555;0.585;0.6;1"
-               dur="14s" repeatCount="indefinite"/>
-      <animateMotion dur="14s" repeatCount="indefinite"
+               keyTimes="0;0.333;0.339;0.356;0.367;1"
+               dur="18s" repeatCount="indefinite"/>
+      <animateMotion dur="18s" repeatCount="indefinite"
                      keyPoints="0;0;0;1;1;1"
-                     keyTimes="0;0.55;0.555;0.585;0.6;1"
-                     path="M712 446 Q540 360 200 200"/>
+                     keyTimes="0;0.333;0.336;0.358;0.367;1"
+                     path="M716 446 Q560 380 430 284"/>
     </circle>
-    <!-- Particle 2 -->
-    <circle r="3" fill="#c4b5fd" filter="url(#hugeGlow)" opacity="0">
+    <circle r="3" fill="#86efac" filter="url(#hugeGlow)" opacity="0">
       <animate attributeName="opacity"
                values="0;0;1;1;0;0"
-               keyTimes="0;0.555;0.56;0.59;0.605;1"
-               dur="14s" repeatCount="indefinite"/>
-      <animateMotion dur="14s" repeatCount="indefinite"
+               keyTimes="0;0.337;0.343;0.360;0.371;1"
+               dur="18s" repeatCount="indefinite"/>
+      <animateMotion dur="18s" repeatCount="indefinite"
                      keyPoints="0;0;0;1;1;1"
-                     keyTimes="0;0.555;0.56;0.59;0.605;1"
-                     path="M712 446 Q540 380 280 250"/>
+                     keyTimes="0;0.337;0.340;0.362;0.371;1"
+                     path="M716 446 Q560 404 400 296"/>
     </circle>
-    <!-- Particle 3 -->
     <circle r="3" fill="#a78bfa" filter="url(#hugeGlow)" opacity="0">
       <animate attributeName="opacity"
                values="0;0;1;1;0;0"
-               keyTimes="0;0.56;0.565;0.595;0.61;1"
-               dur="14s" repeatCount="indefinite"/>
-      <animateMotion dur="14s" repeatCount="indefinite"
+               keyTimes="0;0.341;0.347;0.364;0.375;1"
+               dur="18s" repeatCount="indefinite"/>
+      <animateMotion dur="18s" repeatCount="indefinite"
                      keyPoints="0;0;0;1;1;1"
-                     keyTimes="0;0.56;0.565;0.595;0.61;1"
-                     path="M712 446 Q540 400 340 310"/>
+                     keyTimes="0;0.341;0.344;0.366;0.375;1"
+                     path="M716 446 Q580 360 460 272"/>
     </circle>
 
-    <!-- Burst flash at chart center on arrival (8s) -->
-    <circle cx="328" cy="250" r="0" fill="#a78bfa" opacity="0" filter="url(#hugeGlow)">
+    <!-- landing flash on the zone -->
+    <circle cx="430" cy="284" r="0" fill="#34d399" opacity="0" filter="url(#hugeGlow)">
       <animate attributeName="opacity"
-               values="0;0;0.55;0;0"
-               keyTimes="0;0.585;0.595;0.62;1"
-               dur="14s" repeatCount="indefinite"/>
+               values="0;0;0.5;0;0;0"
+               keyTimes="0;0.358;0.366;0.386;0.387;1"
+               dur="18s" repeatCount="indefinite"/>
       <animate attributeName="r"
-               values="0;0;40;80;0"
-               keyTimes="0;0.585;0.595;0.62;1"
-               dur="14s" repeatCount="indefinite"/>
+               values="0;0;28;56;0;0"
+               keyTimes="0;0.358;0.366;0.386;0.387;1"
+               dur="18s" repeatCount="indefinite"/>
     </circle>
   </g>
 
@@ -681,9 +960,9 @@
         <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" begin="-0.8s"
                  repeatCount="indefinite"/>
       </circle>
-      <text x="16" y="10" fill="#e2e8f0">cTrader</text>
+      <text x="16" y="10" fill="#e2e8f0">Faraz</text>
     </g>
-    <g transform="translate(314,4)">
+    <g transform="translate(302,4)">
       <circle cx="6" cy="6" r="3.6" fill="#fdba74" filter="url(#softGlow)">
         <animate attributeName="opacity" values="0.5;1;0.5" dur="1.7s" begin="-1.1s"
                  repeatCount="indefinite"/>
@@ -706,7 +985,7 @@
     </g>
     <g transform="translate(756,4)">
       <circle cx="6" cy="6" r="3.6" fill="#a78bfa"/>
-      <text x="16" y="10" fill="#e2e8f0">TZ news + countdowns</text>
+      <text x="16" y="10" fill="#e2e8f0">Position tool + risk sizing</text>
     </g>
   </g>
 </svg>

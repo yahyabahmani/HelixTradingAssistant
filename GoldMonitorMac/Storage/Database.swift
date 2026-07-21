@@ -14,7 +14,7 @@ final class AppDatabase {
     /// queries without going through a wrapper method per query.
     let pool: DatabasePool
 
-    /// Repository for OHLC bars (Yahoo / Twelve Data / cTrader-sourced
+    /// Repository for OHLC bars (Yahoo / Twelve Data-sourced
     /// candles).
     let ohlcRepo: OHLCRepo
 

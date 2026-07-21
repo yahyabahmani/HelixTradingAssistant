@@ -1504,7 +1504,7 @@ struct DashboardView: View {
             strategyProfileSheet(for: mode)
         }
         .onReceive(
-            // Throttle: cTrader's bridge can drive `lastUpdateAt` at
+            // Throttle: a fast live feed can drive `lastUpdateAt` at
             // 5 Hz (or whatever the scheduler's flush rate is). Each
             // tick splices the trailing window onto `candles` and
             // rebuilds the chart's scene graph for the visible window.
@@ -3559,7 +3559,7 @@ struct DashboardView: View {
             Text("No pair selected")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Theme.Color.textSecondary)
-            Text("Pick a market in the sidebar — Yahoo/cTrader live data will start streaming once a pair is selected.")
+            Text("Pick a market in the sidebar — live data will start streaming once a pair is selected.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.Color.textMuted)
                 .multilineTextAlignment(.center)

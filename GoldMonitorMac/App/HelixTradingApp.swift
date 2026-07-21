@@ -11,7 +11,6 @@ struct HelixTradingApp: App {
     // without prop drilling.
     @StateObject private var appState = AppState()
     @StateObject private var yahoo = YahooScheduler()
-    @StateObject private var ctrader = CTraderScheduler()
     @StateObject private var news = NewsStore()
     @StateObject private var analysisStore = AnalysisStore()
     /// Paper-trade store — also the mirror for live trades when
@@ -63,7 +62,6 @@ struct HelixTradingApp: App {
             RootView()
                 .environmentObject(appState)
                 .environmentObject(yahoo)
-                .environmentObject(ctrader)
                 .environmentObject(news)
                 .environmentObject(analysisStore)
                 .environmentObject(tradeStore)
@@ -91,7 +89,6 @@ struct HelixTradingApp: App {
                         configStore: autoTraderConfig,
                         analysisStore: analysisStore,
                         tradeStore: tradeStore,
-                        cTrader: ctrader,
                         news: news,
                         paperBalance: paperBalance
                     )
@@ -111,13 +108,8 @@ struct HelixTradingApp: App {
 
                     if let db = appState.database {
                         // Live schedulers — Yahoo for chart history +
-                        // crypto polling, cTrader bridge for the
-                        // ounce live feed (when running).
+                        // crypto polling.
                         yahoo.start(database: db)
-                        yahoo.attachCTraderProvider(ctrader)
-                        ctrader.start(database: db) { [weak yahoo] price, pairID, source in
-                            yahoo?.applyExternalTick(price: price, pairID: pairID, source: source)
-                        }
                         // Mac dual-speed: selected pair gets live data
                         // every 5s, all others every 60min.
                         yahoo.selectedPairID = appState.selectedPairID

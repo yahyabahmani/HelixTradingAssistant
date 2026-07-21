@@ -30,26 +30,17 @@ struct WizardView: View {
         case welcome = 0
         case claude = 1
         case dataSources = 2
-        case ctrader = 3
-        case done = 4
+        case done = 3
 
         var label: String {
             switch self {
             case .welcome:     return "Welcome"
             case .claude:      return "Claude"
             case .dataSources: return "Data sources"
-            case .ctrader:     return "cTrader"
             case .done:        return "Done"
             }
         }
     }
-
-    /// Local copies of the cTrader bridge config so the wizard can
-    /// preview + edit before saving. Loaded from the persisted
-    /// `CTraderConfig` on appear; saved back when the user clicks
-    /// Continue (or "Skip" leaves the existing config untouched).
-    @State private var cTraderEnabled: Bool = false
-    @State private var cTraderPortDraft: String = "7878"
 
     enum ClaudeStatus: Equatable {
         case checking
@@ -79,9 +70,6 @@ struct WizardView: View {
             twelveDataKeyDraft = dataConfig.twelveDataAPIKey
             forexURLDraft = dataConfig.forexFactoryURL
             claudePathDraft = dataConfig.claudeBinaryPath
-            let ct = CTraderConfig.load()
-            cTraderEnabled = ct.enabled
-            cTraderPortDraft = String(ct.port)
             detectClaude()
         }
     }
@@ -127,7 +115,6 @@ struct WizardView: View {
         case .welcome:     welcomeStep
         case .claude:      claudeStep
         case .dataSources: dataSourcesStep
-        case .ctrader:     cTraderStep
         case .done:        doneStep
         }
     }
@@ -350,218 +337,17 @@ struct WizardView: View {
                     .foregroundStyle(Theme.Color.textMuted)
             }
 
-            // Reminder about proxy + cTrader.
+            // Reminder about proxy.
             VStack(alignment: .leading, spacing: 6) {
                 Text("OTHER SETTINGS")
                     .font(.system(size: 9, weight: .bold))
                     .tracking(0.8)
                     .foregroundStyle(Theme.Color.textMuted)
-                Text("SOCKS5 proxy and the cTrader bridge port are configured under Settings → Proxy / cTrader Bridge once setup completes. You don't need either to use the app.")
+                Text("The SOCKS5 proxy is configured under Settings → Proxy once setup completes. You don't need it to use the app.")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.Color.textSecondary)
             }
         }
-    }
-
-    // ── cTrader step (optional) ────────────────────────────────────
-    private var cTraderStep: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "bolt.horizontal.circle.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.accentGradient)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text("cTrader Bridge")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(Theme.Color.textPrimary)
-                        Text("OPTIONAL")
-                            .font(.system(size: 9, weight: .heavy))
-                            .tracking(0.6)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Theme.Color.info))
-                    }
-                    Text("Local TCP bridge that feeds XAU/USD live ticks from a cTrader cBot into Helix. Skip this step if you don't run cTrader — Twelve Data + Yahoo handle the ounce price by themselves.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Color.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-            }
-
-            // Toggle + port input.
-            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                Toggle(isOn: $cTraderEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Enable cTrader bridge")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Color.textPrimary)
-                        Text("Helix listens on localhost for ticks pushed by the cBot.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.Color.textMuted)
-                    }
-                }
-                .toggleStyle(.switch)
-                .tint(Theme.Color.accentStart)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("LOOPBACK PORT")
-                        .font(.system(size: 9, weight: .bold))
-                        .tracking(0.8)
-                        .foregroundStyle(Theme.Color.textMuted)
-                    TextField("7878", text: $cTraderPortDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12).monospaced())
-                        .frame(maxWidth: 140)
-                        .disabled(!cTraderEnabled)
-                    Text("Default 7878. Pick a different port if it collides with another app on your machine.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Theme.Color.textMuted)
-                }
-            }
-            .padding(Theme.Spacing.md)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(Theme.Color.surface)
-            )
-
-            cTraderInstallGuide
-        }
-    }
-
-    // ── cBot install guide (collapsible) ──────────────────────────
-
-    @State private var showCBotSource: Bool = false
-
-    private var cTraderInstallGuide: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            HStack {
-                Image(systemName: "list.number")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Color.accentStart)
-                Text("Install the companion cBot")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.Color.textPrimary)
-                Spacer()
-                copyCBotButton
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                guideStep(number: 1,
-                          title: "Open cTrader → Automate (left rail)",
-                          body: "If you don't have cTrader yet, download it from your broker. The companion cBot runs inside cTrader on the chart you want to stream (XAU/USD for the open-source build).")
-                guideStep(number: 2,
-                          title: "Add a new cBot: Add → Code Editor",
-                          body: "In cTrader's Automate pane, right-click \"cBots\" and pick \"Add cBot\". Name it `HelixBridgeBot`. Open the editor.")
-                guideStep(number: 3,
-                          title: "Paste the cBot source",
-                          body: "Click \"Copy cBot source\" above, replace the editor's contents entirely, and Build (▶ icon or ⌘B). It compiles as part of cTrader's solution — no extra deps.")
-                guideStep(number: 4,
-                          title: "Attach to your XAU/USD chart",
-                          body: "Drag the freshly-compiled `HelixBridgeBot` onto the XAU/USD chart at whatever timeframe you analyze (the bot streams ticks regardless of TF). Click Start.")
-                guideStep(number: 5,
-                          title: "Confirm the connection back in Helix",
-                          body: "Within a few seconds Helix's status flips to \"Connected\" (Settings → cTrader Bridge). If it doesn't, check the bot's Log tab for connection errors — wrong port is the usual cause.")
-            }
-
-            DisclosureGroup(
-                isExpanded: $showCBotSource,
-                content: { sourceViewer },
-                label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.text")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("View cBot source inline (\(cBotSourceLineCount) lines)")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundStyle(Theme.Color.textSecondary)
-                }
-            )
-        }
-        .padding(Theme.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Theme.Color.surface)
-        )
-    }
-
-    private func guideStep(number: Int, title: String, body: String) -> some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
-            Text("\(number)")
-                .font(.system(size: 11, weight: .heavy).monospacedDigit())
-                .foregroundStyle(.white)
-                .frame(width: 20, height: 20)
-                .background(Circle().fill(Theme.Color.accentStart))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Color.textPrimary)
-                Text(body)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.Color.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private var copyCBotButton: some View {
-        Button {
-            let source = Self.loadCBotSource()
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.setString(source, forType: .string)
-        } label: {
-            Label("Copy cBot source", systemImage: "doc.on.doc")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6).fill(Theme.Color.accentStart)
-                )
-        }
-        .buttonStyle(.plain)
-        .help("Copy the full HelixBridgeBot.cs to the clipboard. Paste it into cTrader's code editor and Build.")
-    }
-
-    private var sourceViewer: some View {
-        ScrollView([.vertical]) {
-            Text(Self.loadCBotSource())
-                .font(.system(size: 10).monospaced())
-                .foregroundStyle(Theme.Color.textPrimary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Theme.Spacing.sm)
-        }
-        .frame(maxHeight: 320)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Theme.Color.canvas)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(Theme.Color.border, lineWidth: 1)
-        )
-    }
-
-    private var cBotSourceLineCount: Int {
-        Self.loadCBotSource().split(separator: "\n", omittingEmptySubsequences: false).count
-    }
-
-    /// Read the bundled `HelixBridgeBot.cs` resource — the
-    /// source that ships with this build of Helix, kept in lock-
-    /// step with the Swift bridge protocol. Falls back to a short
-    /// notice if the resource is missing (would mean a malformed
-    /// app bundle).
-    private static func loadCBotSource() -> String {
-        if let url = Bundle.main.url(forResource: "HelixBridgeBot", withExtension: "cs"),
-           let s = try? String(contentsOf: url, encoding: .utf8)
-        {
-            return s
-        }
-        return "// HelixBridgeBot.cs resource missing from this build.\n// Grab the source from the project repo at CTraderBridge/HelixBridgeBot.cs"
     }
 
     // ── Done step ──────────────────────────────────────────────────
@@ -618,15 +404,6 @@ struct WizardView: View {
             }
             Spacer()
 
-            // Skip — only the cTrader step is genuinely optional.
-            // Skipping leaves the persisted CTraderConfig as-is and
-            // moves to .done without saving the draft port/toggle.
-            if step == .ctrader {
-                SecondaryButton(title: "Skip") {
-                    step = .done
-                }
-            }
-
             if step != .done {
                 PrimaryButton(primaryLabel) {
                     advance()
@@ -643,15 +420,14 @@ struct WizardView: View {
 
     private var primaryLabel: String {
         switch step {
-        case .dataSources, .ctrader: return "Save & continue"
-        default:                     return "Continue"
+        case .dataSources: return "Save & continue"
+        default:           return "Continue"
         }
     }
 
     /// Save the relevant draft for the current step, then move to
     /// the next. Each step that has editable state writes through
-    /// its own subset (so e.g. moving past Data Sources doesn't
-    /// touch the cTrader config).
+    /// its own subset.
     private func advance() {
         switch step {
         case .dataSources:
@@ -660,10 +436,6 @@ struct WizardView: View {
                 forexFactoryURL:  forexURLDraft,
                 claudeBinaryPath: claudePathDraft
             )
-            step = .ctrader
-        case .ctrader:
-            let port = UInt16(cTraderPortDraft.trimmingCharacters(in: .whitespaces)) ?? 7878
-            CTraderConfig(enabled: cTraderEnabled, port: port).save()
             step = .done
         case .welcome, .claude:
             step = Step(rawValue: step.rawValue + 1) ?? .done
